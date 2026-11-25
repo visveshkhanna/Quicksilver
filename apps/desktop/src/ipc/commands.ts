@@ -3,11 +3,16 @@ import { decodePage, type Page } from './page'
 import type {
   AppInfo,
   ColumnInfo,
+  CopyFormat,
   DbObject,
   Engine,
+  ForeignKey,
+  ObjectKind,
+  Plan,
   ResultInfo,
   RunEvent,
   SessionInfo,
+  SortDirection,
   StatementRange,
 } from './types'
 
@@ -90,4 +95,34 @@ export function listColumns(session: number, schema: string, table: string): Pro
 /** The statement under the cursor, as UTF-16 offsets into `script`. */
 export function statementAt(script: string, engine: Engine, cursor: number): Promise<StatementRange | null> {
   return invoke('statement_at', { script, engine, cursor })
+}
+
+/** Sorts a finished result by `column`, or restores arrival order with `null`. */
+export function sortResult(result: number, column: number | null, direction: SortDirection = 'ascending') {
+  return invoke<void>('sort_result', { result, column, direction })
+}
+
+/** Rows `offset .. offset + count` of a result, as shown, in `format`. */
+export function copyRows(
+  result: number,
+  offset: number,
+  count: number,
+  columns: number[],
+  format: CopyFormat,
+): Promise<string> {
+  return invoke('copy_rows', { result, offset, count, columns, format })
+}
+
+export function listForeignKeys(session: number, schema: string): Promise<ForeignKey[]> {
+  return invoke('list_foreign_keys', { session, schema })
+}
+
+/** How the server would run one statement, without running it. */
+export function explain(session: number, statement: string): Promise<Plan> {
+  return invoke('explain', { session, statement })
+}
+
+/** The SQL that creates an object. */
+export function objectDdl(session: number, schema: string, name: string, kind: ObjectKind): Promise<string> {
+  return invoke('object_ddl', { session, schema, name, kind })
 }
