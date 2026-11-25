@@ -40,7 +40,15 @@ position: number | null,
 /**
  * Extra detail or a hint from the server.
  */
-detail: string | null, } | { "kind": "cancelled" } | { "kind": "closed" } | { "kind": "unsupported", 
+detail: string | null, } | { "kind": "confirmationNeeded", 
+/**
+ * Why, in words.
+ */
+message: string, 
+/**
+ * The statements that need confirming.
+ */
+statements: Array<string>, } | { "kind": "cancelled" } | { "kind": "closed" } | { "kind": "unsupported", 
 /**
  * What is not supported.
  */

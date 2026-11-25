@@ -22,4 +22,8 @@ database: string | null,
 /**
  * Whether writes are refused.
  */
-readOnly: boolean, };
+readOnly: boolean, 
+/**
+ * Whether a script that changes the schema must be confirmed first.
+ */
+confirmSchemaChanges: boolean, };

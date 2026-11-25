@@ -10,8 +10,9 @@ use std::sync::Arc;
 use qs_core::{ConnectionConfig, Error};
 use qs_service::saved::HistoryRecorder;
 use qs_service::{
-    AppInfo, ColumnInfo, CopyFormat, DbObject, ExecuteOptions, ForeignKey, ObjectKind, Plan,
-    ResultId, ResultInfo, RunEvent, RunId, Service, SessionId, SessionInfo, SortDirection,
+    AppInfo, ColumnInfo, CopyFormat, DbObject, EditTarget, ExecuteOptions, ForeignKey, ObjectKind,
+    Plan, ResultId, ResultInfo, RowEdit, RunEvent, RunId, Service, SessionId, SessionInfo,
+    SortDirection,
 };
 use qs_store::Store;
 use tauri::State;
@@ -60,15 +61,23 @@ pub async fn run(
     row_cap: Option<u64>,
     profile_id: Option<String>,
     database: Option<String>,
+    confirmed: Option<bool>,
     on_event: Channel<RunEvent>,
 ) -> Result<RunId> {
+    let confirmed = confirmed.unwrap_or(false);
     let history = HistoryRecorder::new(Arc::clone(&store), profile_id, database, script.clone());
-    service.start_run(session, script, ExecuteOptions { row_cap }, move |event| {
-        history.observe(&event);
-        if let Err(err) = on_event.send(event) {
-            tracing::warn!("a run event could not be delivered: {err}");
-        }
-    })
+    service.start_run(
+        session,
+        script,
+        ExecuteOptions { row_cap },
+        confirmed,
+        move |event| {
+            history.observe(&event);
+            if let Err(err) = on_event.send(event) {
+                tracing::warn!("a run event could not be delivered: {err}");
+            }
+        },
+    )
 }
 
 /// Cancels a run.
@@ -119,6 +128,44 @@ pub async fn copy_rows(
     format: CopyFormat,
 ) -> Result<String> {
     service.copy_rows(result, offset, count, &columns, format)
+}
+
+/// Whether a result's rows can be edited, and how rows are named.
+#[tauri::command]
+pub async fn edit_target(service: State<'_, Service>, result: ResultId) -> Result<EditTarget> {
+    service.edit_target(result).await
+}
+
+/// The statements edits would run, without running them.
+#[tauri::command]
+pub async fn preview_edits(
+    service: State<'_, Service>,
+    result: ResultId,
+    edits: Vec<RowEdit>,
+) -> Result<Vec<String>> {
+    service.preview_edits(result, &edits).await
+}
+
+/// Runs edits in one transaction; nothing is saved unless every change hits
+/// exactly one row.
+#[tauri::command]
+pub async fn apply_edits(
+    service: State<'_, Service>,
+    result: ResultId,
+    edits: Vec<RowEdit>,
+) -> Result<Vec<String>> {
+    service.apply_edits(result, &edits).await
+}
+
+/// The filter bar's query for a table, checked by the filter gate.
+#[tauri::command]
+pub async fn filter_query(
+    engine: qs_core::Engine,
+    schema: Option<String>,
+    table: String,
+    filter: String,
+) -> Result<String> {
+    qs_service::filter_query(engine, schema.as_deref(), &table, &filter)
 }
 
 /// Frees a result.

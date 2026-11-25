@@ -67,7 +67,12 @@ pub async fn connect_profile(
     password: Option<String>,
 ) -> Result<SessionInfo> {
     let config = saved::connection_config(&store, &id, database, password).await?;
-    let info = service.connect(&config).await?;
+    // Read-write connections ask before a script changes the schema; read-only
+    // ones are refused writes by the server; full ones run everything.
+    let policy = qs_service::SessionPolicy {
+        confirm_schema_changes: store.profile(&id)?.fields.mode == qs_store::Mode::ReadWrite,
+    };
+    let info = service.connect_with(&config, policy).await?;
     let database = info.database.clone();
     let (service, store, session) = (service.inner().clone(), Arc::clone(&store), info.id);
     tauri::async_runtime::spawn(async move {

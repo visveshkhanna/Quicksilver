@@ -1029,7 +1029,8 @@ mod tests {
     fn pages_carry_each_rows_source_and_source_rows_read_back() {
         let s = typed(&[TypeTag::Integer, TypeTag::Text], SpillPolicy::default());
         for (n, t) in [("3", Some("c")), ("1", None), ("2", Some("b"))] {
-            s.push(&Owned(vec![Some(n.to_owned()), t.map(str::to_owned)])).expect("push");
+            s.push(&Owned(vec![Some(n.to_owned()), t.map(str::to_owned)]))
+                .expect("push");
         }
         s.finish();
         s.sort(Some((0, SortDirection::Ascending))).expect("sort");

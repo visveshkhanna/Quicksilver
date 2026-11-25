@@ -52,6 +52,15 @@ pub enum Error {
         /// Extra detail or a hint from the server.
         detail: Option<String>,
     },
+    /// The script changes the schema and the connection's mode asks first.
+    /// The UI shows `statements` and runs the script again, confirmed.
+    #[error("{message}")]
+    ConfirmationNeeded {
+        /// Why, in words.
+        message: String,
+        /// The statements that need confirming.
+        statements: Vec<String>,
+    },
     /// The user cancelled the operation.
     #[error("cancelled")]
     Cancelled,

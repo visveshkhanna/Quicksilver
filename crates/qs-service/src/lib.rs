@@ -8,6 +8,7 @@
 //! [`store::ResultStore`] until the UI closes it; the UI reads it a page at a
 //! time with [`Service::page`].
 
+pub mod edit;
 pub mod saved;
 pub mod store;
 
@@ -25,6 +26,7 @@ use qs_drivers::{Connection, ResultSink, RowView};
 pub use qs_io::rows::Format as CopyFormat;
 use serde::Serialize;
 
+pub use crate::edit::{CellValue, EditTarget, RowEdit, filter_query};
 use crate::store::ResultStore;
 pub use crate::store::{SortDirection, SpillPolicy};
 
@@ -101,6 +103,16 @@ pub struct SessionInfo {
     pub database: Option<String>,
     /// Whether writes are refused.
     pub read_only: bool,
+    /// Whether a script that changes the schema must be confirmed first.
+    pub confirm_schema_changes: bool,
+}
+
+/// How a session treats what it runs, from the connection's mode.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SessionPolicy {
+    /// Refuse a script that changes the schema until it is confirmed
+    /// (read-write mode).
+    pub confirm_schema_changes: bool,
 }
 
 /// What happens during a run, in order.
@@ -227,6 +239,8 @@ fn byte_to_utf16(text: &str, byte: usize) -> usize {
 
 struct Session {
     connection: Connection,
+    read_only: bool,
+    policy: SessionPolicy,
     /// One script at a time per session: statements on one connection run in
     /// order anyway, and interleaving two scripts would mix their effects.
     running: tokio::sync::Mutex<()>,
@@ -237,6 +251,8 @@ struct State {
     sessions: HashMap<SessionId, Arc<Session>>,
     runs: HashMap<RunId, CancellationToken>,
     results: HashMap<ResultId, Arc<ResultStore>>,
+    /// The session each result came from, for editing it.
+    origins: HashMap<ResultId, SessionId>,
 }
 
 /// Sessions, runs and results. Cheap to clone; clones share everything.
@@ -281,8 +297,17 @@ impl Service {
             .ok_or_else(|| Error::config(format!("no open session {id}")))
     }
 
-    /// Opens a session.
+    /// Opens a session that runs anything it is given.
     pub async fn connect(&self, config: &ConnectionConfig) -> Result<SessionInfo> {
+        self.connect_with(config, SessionPolicy::default()).await
+    }
+
+    /// Opens a session with a policy from the connection's mode.
+    pub async fn connect_with(
+        &self,
+        config: &ConnectionConfig,
+        policy: SessionPolicy,
+    ) -> Result<SessionInfo> {
         let connection = Connection::connect(config).await?;
         let engine = connection.engine();
         let id = self.id();
@@ -290,6 +315,8 @@ impl Service {
             id,
             Arc::new(Session {
                 connection,
+                read_only: config.read_only,
+                policy,
                 running: tokio::sync::Mutex::new(()),
             }),
         );
@@ -298,6 +325,28 @@ impl Service {
             engine,
             database: effective_database(config),
             read_only: config.read_only,
+            confirm_schema_changes: policy.confirm_schema_changes,
+        })
+    }
+
+    /// Refuses `script` on a confirm-first session until it is confirmed,
+    /// naming the statements that change the schema.
+    fn check_mode(session: &Session, script: &str, confirmed: bool) -> Result<()> {
+        if confirmed || !session.policy.confirm_schema_changes {
+            return Ok(());
+        }
+        let statements = edit::needing_confirmation(script, session.connection.engine());
+        if statements.is_empty() {
+            return Ok(());
+        }
+        Err(Error::ConfirmationNeeded {
+            message: format!(
+                "{} statement{} may change the schema; run {} anyway?",
+                statements.len(),
+                if statements.len() == 1 { "" } else { "s" },
+                if statements.len() == 1 { "it" } else { "them" },
+            ),
+            statements,
         })
     }
 
@@ -313,45 +362,51 @@ impl Service {
 
     /// Starts running `script` in the background and returns its id at once.
     /// `events` receives every [`RunEvent`], ending with `Finished` or
-    /// `Failed`.
+    /// `Failed`. On a confirm-first session a script that changes the schema
+    /// is refused with [`Error::ConfirmationNeeded`] unless `confirmed`.
     pub fn start_run(
         &self,
-        session: SessionId,
+        session_id: SessionId,
         script: String,
         options: ExecuteOptions,
+        confirmed: bool,
         events: impl Fn(RunEvent) + Send + Sync + 'static,
     ) -> Result<RunId> {
-        let session = self.session(session)?;
+        let session = self.session(session_id)?;
+        Self::check_mode(&session, &script, confirmed)?;
         let run = self.id();
         let cancel = CancellationToken::new();
         self.state().runs.insert(run, cancel.clone());
         let service = self.clone();
         tokio::spawn(async move {
             service
-                .execute(&session, &script, options, &cancel, events)
+                .execute(session_id, &session, &script, options, &cancel, events)
                 .await;
             service.state().runs.remove(&run);
         });
         Ok(run)
     }
 
-    /// Runs `script` to completion, reporting through `events`.
+    /// Runs `script` to completion, reporting through `events`. A
+    /// confirm-first session refuses a script that changes the schema.
     pub async fn run(
         &self,
-        session: SessionId,
+        session_id: SessionId,
         script: &str,
         options: ExecuteOptions,
         cancel: &CancellationToken,
         events: impl Fn(RunEvent) + Send + Sync,
     ) -> Result<()> {
-        let session = self.session(session)?;
-        self.execute(&session, script, options, cancel, events)
+        let session = self.session(session_id)?;
+        Self::check_mode(&session, script, false)?;
+        self.execute(session_id, &session, script, options, cancel, events)
             .await;
         Ok(())
     }
 
     async fn execute(
         &self,
+        session_id: SessionId,
         session: &Session,
         script: &str,
         options: ExecuteOptions,
@@ -362,6 +417,7 @@ impl Service {
         let started = Instant::now();
         let mut sink = ServiceSink {
             service: self,
+            session: session_id,
             events: &events,
             index: None,
             current: None,
@@ -426,7 +482,71 @@ impl Service {
 
     /// Frees a result.
     pub fn close_result(&self, result: ResultId) {
-        self.state().results.remove(&result);
+        let mut state = self.state();
+        state.results.remove(&result);
+        state.origins.remove(&result);
+    }
+
+    /// The result, the session it came from, and whether its rows can be
+    /// edited.
+    async fn edit_context(
+        &self,
+        result: ResultId,
+    ) -> Result<(
+        Arc<ResultStore>,
+        Arc<Session>,
+        std::result::Result<edit::Target, String>,
+    )> {
+        let store = self.result(result)?;
+        let origin = self.state().origins.get(&result).copied();
+        let session = match origin.and_then(|id| self.session(id).ok()) {
+            Some(session) => session,
+            None => {
+                return Err(Error::config(
+                    "the connection these rows came from is closed; run the query again",
+                ));
+            }
+        };
+        let target = edit::target(&session.connection, store.columns(), session.read_only).await?;
+        Ok((store, session, target))
+    }
+
+    /// Whether a result's rows can be edited, and how rows are named.
+    pub async fn edit_target(&self, result: ResultId) -> Result<EditTarget> {
+        Ok(match self.edit_context(result).await?.2 {
+            Ok(target) => target.describe(),
+            Err(reason) => EditTarget::refused_because(reason),
+        })
+    }
+
+    /// The statements `edits` would run, each checked by its gate, without
+    /// running anything.
+    pub async fn preview_edits(&self, result: ResultId, edits: &[RowEdit]) -> Result<Vec<String>> {
+        let (store, session, target) = self.edit_context(result).await?;
+        let target = target.map_err(Error::unsupported)?;
+        target.plan(
+            &store,
+            edits,
+            qs_sql::Dialect::for_engine(session.connection.engine()),
+        )
+    }
+
+    /// Runs `edits` in one transaction, committed only if every statement
+    /// changed exactly one row. Returns the statements that ran.
+    pub async fn apply_edits(&self, result: ResultId, edits: &[RowEdit]) -> Result<Vec<String>> {
+        let (store, session, target) = self.edit_context(result).await?;
+        let target = target.map_err(Error::unsupported)?;
+        let statements = target.plan(
+            &store,
+            edits,
+            qs_sql::Dialect::for_engine(session.connection.engine()),
+        )?;
+        if statements.is_empty() {
+            return Ok(statements);
+        }
+        let _running = session.running.lock().await;
+        edit::apply(&session.connection, &statements).await?;
+        Ok(statements)
     }
 
     /// Displayed rows `offset .. offset + count` of a result, restricted to
@@ -533,6 +653,7 @@ impl Service {
 /// Stores rows and turns driver callbacks into [`RunEvent`]s.
 struct ServiceSink<'a, F> {
     service: &'a Service,
+    session: SessionId,
     events: &'a F,
     index: Option<usize>,
     current: Option<(ResultId, Arc<ResultStore>)>,
@@ -554,7 +675,11 @@ impl<F: Fn(RunEvent) + Send + Sync> ResultSink for ServiceSink<'_, F> {
             columns.clone(),
             SpillPolicy::clone(&self.service.spill),
         ));
-        self.service.state().results.insert(id, store.clone());
+        {
+            let mut state = self.service.state();
+            state.results.insert(id, store.clone());
+            state.origins.insert(id, self.session);
+        }
         self.current = Some((id, store));
         self.last_progress = Instant::now();
         (self.events)(RunEvent::ResultStarted {

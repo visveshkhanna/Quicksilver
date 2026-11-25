@@ -127,6 +127,7 @@ async fn a_background_run_can_be_cancelled() {
             session.id,
             "WITH RECURSIVE g(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM g) SELECT count(*) FROM g".into(),
             ExecuteOptions { row_cap: None },
+            false,
             sink,
         )
         .expect("starts");
@@ -185,6 +186,7 @@ async fn unknown_sessions_are_errors() {
                 42,
                 "SELECT 1".into(),
                 ExecuteOptions { row_cap: None },
+                false,
                 |_| {}
             )
             .is_err()
@@ -366,4 +368,440 @@ async fn a_large_result_spills_by_the_services_policy() {
         .copy_rows(result, 10, 1, &[1], CopyFormat::Tsv { header: false })
         .expect("copies spilled rows");
     assert_eq!(tsv, "row 11\n");
+}
+
+// --- Editing -------------------------------------------------------------------
+
+async fn rows_of(service: &Service, session: SessionId, sql: &str) -> Vec<Vec<Option<String>>> {
+    let result = last_result(service, session, sql).await;
+    let mut out = Vec::new();
+    let store = service.result(result).expect("result");
+    let all: Vec<usize> = (0..store.columns().len()).collect();
+    store
+        .rows(0, u64::MAX, &all, |row| {
+            out.push(
+                (0..row.len())
+                    .map(|i| row.get(i).map(str::to_owned))
+                    .collect(),
+            );
+        })
+        .expect("rows");
+    out
+}
+
+fn set(column: usize, value: Option<&str>) -> CellValue {
+    CellValue {
+        column,
+        value: value.map(str::to_owned),
+    }
+}
+
+async fn people(service: &Service) -> SessionId {
+    let session = service.connect(&memory()).await.expect("connects").id;
+    last_result(
+        service,
+        session,
+        "CREATE TABLE people (id INTEGER PRIMARY KEY, name TEXT, score REAL); \
+         INSERT INTO people VALUES (1, 'ann', 1.5), (2, 'bob', NULL), (3, 'cy', 3); \
+         CREATE TABLE tags (label TEXT, n INTEGER); \
+         INSERT INTO tags VALUES ('a', 1), ('a', 1), ('b', 2); SELECT 1",
+    )
+    .await;
+    session
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn says_which_results_can_be_edited_and_why_not() {
+    let service = Service::new();
+    let session = people(&service).await;
+    let target = |sql: &'static str| {
+        let service = service.clone();
+        async move {
+            let result = last_result(&service, session, sql).await;
+            service.edit_target(result).await.expect("target")
+        }
+    };
+    let by_key = target("SELECT name, id FROM people").await;
+    assert_eq!(by_key.reason, None);
+    assert!(by_key.by_primary_key);
+    assert_eq!(by_key.key, [1]);
+    assert_eq!(by_key.table.as_deref(), Some("people"));
+
+    let by_values = target("SELECT * FROM tags").await;
+    assert_eq!(by_values.reason, None);
+    assert!(!by_values.by_primary_key);
+    assert_eq!(by_values.key, [0, 1]);
+
+    for (sql, why) in [
+        (
+            "SELECT name FROM people",
+            "primary key column id is not in the result",
+        ),
+        ("SELECT id, upper(name) FROM people", "computed"),
+        (
+            "SELECT p.id, t.label FROM people p, tags t",
+            "more than one table",
+        ),
+        ("SELECT label FROM tags", "no primary key"),
+        ("SELECT id, id FROM people", "appears twice"),
+    ] {
+        let reason = target(sql).await.reason.unwrap_or_default();
+        assert!(reason.contains(why), "{sql}: {reason}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn applies_updates_inserts_and_deletes_in_one_transaction() {
+    let service = Service::new();
+    let session = people(&service).await;
+    let result = last_result(&service, session, "SELECT * FROM people ORDER BY id").await;
+    // Sorted for display, edits still name rows by where they arrived.
+    service
+        .sort_result(result, Some((0, SortDirection::Descending)))
+        .expect("sorts");
+    let edits = [
+        RowEdit::Update {
+            row: 0,
+            set: vec![set(1, Some("O'Brien")), set(2, None)],
+        },
+        RowEdit::Delete { row: 2 },
+        RowEdit::Insert {
+            values: vec![set(0, Some("9")), set(1, Some("zed"))],
+        },
+    ];
+    let preview = service
+        .preview_edits(result, &edits)
+        .await
+        .expect("previews");
+    assert_eq!(
+        preview,
+        [
+            "UPDATE \"people\" SET \"name\" = 'O''Brien', \"score\" = NULL WHERE \"id\" = 1",
+            "DELETE FROM \"people\" WHERE \"id\" = 3",
+            "INSERT INTO \"people\" (\"id\", \"name\") VALUES (9, 'zed')",
+        ]
+    );
+    // A preview runs nothing.
+    assert_eq!(
+        rows_of(&service, session, "SELECT count(*) FROM people").await[0][0].as_deref(),
+        Some("3")
+    );
+
+    let ran = service.apply_edits(result, &edits).await.expect("applies");
+    assert_eq!(ran, preview);
+    let after = rows_of(
+        &service,
+        session,
+        "SELECT id, name, score FROM people ORDER BY id",
+    )
+    .await;
+    let s = |v: &str| Some(v.to_owned());
+    assert_eq!(
+        after,
+        [
+            vec![s("1"), s("O'Brien"), None],
+            vec![s("2"), s("bob"), None],
+            vec![s("9"), s("zed"), None],
+        ]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn nothing_is_saved_unless_every_change_hits_exactly_one_row() {
+    let service = Service::new();
+    let session = people(&service).await;
+
+    // Two identical rows cannot be told apart, so editing one changes both
+    // and the whole transaction is rolled back.
+    let tags = last_result(&service, session, "SELECT label, n FROM tags").await;
+    let err = service
+        .apply_edits(
+            tags,
+            &[
+                RowEdit::Update {
+                    row: 2,
+                    set: vec![set(0, Some("c"))],
+                },
+                RowEdit::Update {
+                    row: 0,
+                    set: vec![set(0, Some("z"))],
+                },
+            ],
+        )
+        .await
+        .expect_err("refused");
+    assert!(err.to_string().contains("2 rows instead of one"), "{err}");
+    let labels = rows_of(&service, session, "SELECT label FROM tags ORDER BY label").await;
+    assert_eq!(
+        labels.concat(),
+        [Some("a".into()), Some("a".into()), Some("b".into())]
+    );
+
+    // A row deleted since the query ran matches nothing.
+    let result = last_result(&service, session, "SELECT * FROM people").await;
+    last_result(
+        &service,
+        session,
+        "DELETE FROM people WHERE id = 2; SELECT 1",
+    )
+    .await;
+    let err = service
+        .apply_edits(
+            result,
+            &[
+                RowEdit::Update {
+                    row: 0,
+                    set: vec![set(1, Some("first"))],
+                },
+                RowEdit::Delete { row: 1 },
+            ],
+        )
+        .await
+        .expect_err("refused");
+    assert!(err.to_string().contains("0 rows instead of one"), "{err}");
+    assert_eq!(
+        rows_of(&service, session, "SELECT name FROM people WHERE id = 1").await[0][0].as_deref(),
+        Some("ann"),
+        "the first change was rolled back too"
+    );
+
+    // Bad requests never reach the database.
+    assert!(
+        service
+            .preview_edits(result, &[RowEdit::Delete { row: 99 }])
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .preview_edits(
+                result,
+                &[RowEdit::Update {
+                    row: 0,
+                    set: vec![set(7, None)]
+                }]
+            )
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn read_only_results_cannot_be_edited() {
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join("ro.db");
+    let mut config = ConnectionConfig::new(Engine::Sqlite);
+    config.path = Some(path.clone());
+    config.options.insert("create".into(), "true".into());
+    let service = Service::new();
+    let writer = service.connect(&config).await.expect("connects").id;
+    last_result(
+        &service,
+        writer,
+        "CREATE TABLE t (id INTEGER PRIMARY KEY); INSERT INTO t VALUES (1); SELECT 1",
+    )
+    .await;
+    config.read_only = true;
+    let reader = service.connect(&config).await.expect("connects").id;
+    let result = last_result(&service, reader, "SELECT * FROM t").await;
+    let target = service.edit_target(result).await.expect("target");
+    assert_eq!(
+        target.reason.as_deref(),
+        Some("this connection is read-only")
+    );
+    assert!(
+        service
+            .apply_edits(result, &[RowEdit::Delete { row: 0 }])
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_read_write_session_asks_before_changing_the_schema() {
+    let service = Service::new();
+    let session = service
+        .connect_with(
+            &memory(),
+            SessionPolicy {
+                confirm_schema_changes: true,
+            },
+        )
+        .await
+        .expect("connects");
+    assert!(session.confirm_schema_changes);
+    let refused = service
+        .start_run(
+            session.id,
+            "SELECT 1; CREATE TABLE x (a INT); INSERT INTO x VALUES (1)".into(),
+            ExecuteOptions { row_cap: None },
+            false,
+            |_| {},
+        )
+        .expect_err("asks");
+    let Error::ConfirmationNeeded { statements, .. } = refused else {
+        panic!("{refused:?}");
+    };
+    assert_eq!(statements, ["CREATE TABLE x (a INT)"]);
+    // Reads and writes run without asking; confirmed, the schema change runs.
+    service
+        .start_run(
+            session.id,
+            "SELECT 1; INSERT INTO nowhere VALUES (1)".into(),
+            ExecuteOptions { row_cap: None },
+            false,
+            |_| {},
+        )
+        .expect("no schema change, no question");
+    service
+        .start_run(
+            session.id,
+            "CREATE TABLE x (a INT)".into(),
+            ExecuteOptions { row_cap: None },
+            true,
+            |_| {},
+        )
+        .expect("confirmed");
+}
+
+#[test]
+fn the_filter_bar_query_is_built_and_gated_in_rust() {
+    assert_eq!(
+        filter_query(Engine::Postgres, Some("sales"), "orders", " id > 1 ;").expect("ok"),
+        "SELECT * FROM \"sales\".\"orders\" WHERE id > 1;\n"
+    );
+    assert_eq!(
+        filter_query(
+            Engine::Postgres,
+            Some("sales"),
+            "orders",
+            "order by id desc"
+        )
+        .expect("ok"),
+        "SELECT * FROM \"sales\".\"orders\" order by id desc;\n"
+    );
+    assert_eq!(
+        filter_query(Engine::Sqlite, Some("main"), "t", "").expect("ok"),
+        "SELECT * FROM \"t\";\n"
+    );
+    for bad in [
+        "1 = 1; DELETE FROM orders",
+        "1 = 1 FOR UPDATE",
+        "id > (",
+        "1=1 UNION SELECT * FROM secrets",
+    ] {
+        assert!(
+            filter_query(Engine::Postgres, Some("sales"), "orders", bad).is_err(),
+            "{bad}"
+        );
+    }
+}
+
+fn live_postgres() -> ConnectionConfig {
+    let url = std::env::var("QS_TEST_POSTGRES_URL").unwrap_or_else(|_| {
+        "postgresql://quicksilver:quicksilver@127.0.0.1:15432/quicksilver_dev?sslmode=disable"
+            .to_owned()
+    });
+    ConnectionConfig::from_url(&url).expect("valid URL")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs the development Postgres (dev/compose.yaml)"]
+async fn live_postgres_names_rows_by_the_values_it_printed() {
+    let service = Service::new();
+    let session = service
+        .connect(&live_postgres())
+        .await
+        .expect("connects")
+        .id;
+    let schema = format!("qs_edit_{}", std::process::id());
+    last_result(
+        &service,
+        session,
+        &format!(
+            "CREATE SCHEMA {schema}; \
+             CREATE TABLE {schema}.zoo (n numeric, f float8, t timestamptz, b bytea, j jsonb, \
+                 u uuid, a int[], i interval, s text); \
+             INSERT INTO {schema}.zoo VALUES \
+                 (12345678901234567890.123456789, 0.1, '2024-02-29 23:59:59.123456+05:30', '\\xdeadbeef', \
+                  '{{\"k\": [1, \"x\"]}}', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '{{1,NULL,3}}', \
+                  '1 day 02:03:04.5', 'it''s'), \
+                 (-1, 'NaN', NULL, '\\x', 'null', NULL, '{{}}', '-1 mon', NULL); \
+             SELECT 1"
+        ),
+    )
+    .await;
+
+    let result = last_result(
+        &service,
+        session,
+        &format!("SELECT * FROM {schema}.zoo ORDER BY n DESC"),
+    )
+    .await;
+    let target = service.edit_target(result).await.expect("target");
+    assert_eq!(target.reason, None, "{target:?}");
+    assert!(!target.by_primary_key);
+    // Each row is found again by every value exactly as the server printed
+    // it, so each update changes exactly one row.
+    service
+        .apply_edits(
+            result,
+            &[
+                RowEdit::Update {
+                    row: 0,
+                    set: vec![set(8, Some("first"))],
+                },
+                RowEdit::Update {
+                    row: 1,
+                    set: vec![set(8, Some("second \\ ' \""))],
+                },
+            ],
+        )
+        .await
+        .expect("both rows matched exactly once");
+    let names = rows_of(
+        &service,
+        session,
+        &format!("SELECT s FROM {schema}.zoo ORDER BY n DESC"),
+    )
+    .await;
+    assert_eq!(
+        names.concat(),
+        [Some("first".into()), Some("second \\ ' \"".into())]
+    );
+
+    // Insert and delete by primary key on a keyed table.
+    last_result(
+        &service,
+        session,
+        &format!("CREATE TABLE {schema}.keyed (id bigint PRIMARY KEY, note text); INSERT INTO {schema}.keyed VALUES (1, 'a'); SELECT 1"),
+    )
+    .await;
+    let keyed = last_result(&service, session, &format!("SELECT * FROM {schema}.keyed")).await;
+    service
+        .apply_edits(
+            keyed,
+            &[
+                RowEdit::Insert {
+                    values: vec![set(0, Some("2")), set(1, Some("b"))],
+                },
+                RowEdit::Delete { row: 0 },
+            ],
+        )
+        .await
+        .expect("applies");
+    let left = rows_of(
+        &service,
+        session,
+        &format!("SELECT id, note FROM {schema}.keyed"),
+    )
+    .await;
+    assert_eq!(left, [vec![Some("2".into()), Some("b".into())]]);
+
+    last_result(
+        &service,
+        session,
+        &format!("DROP SCHEMA {schema} CASCADE; SELECT 1"),
+    )
+    .await;
 }
