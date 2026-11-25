@@ -301,8 +301,48 @@ fn is_word_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_' || b == b'$' || b >= 0x80
 }
 
+impl Dialect {
+    /// The lexical rules `engine`'s SQL follows.
+    pub fn for_engine(engine: qs_core::Engine) -> Dialect {
+        use qs_core::Engine;
+        match engine {
+            Engine::Postgres | Engine::Duckdb => Dialect::Postgres,
+            Engine::Mysql | Engine::Mariadb | Engine::Clickhouse => Dialect::MySql,
+            Engine::Sqlite | Engine::Turso => Dialect::Sqlite,
+            Engine::Mssql | Engine::Mongodb | Engine::Redis | Engine::Snowflake => Dialect::Generic,
+        }
+    }
+}
+
+/// The statement the cursor at byte offset `cursor` is in: the last one
+/// starting at or before it, so a cursor in the blank space after a
+/// statement (just past its `;`, say) still picks that statement. A cursor
+/// before the first statement picks the first. `None` when there are no
+/// statements.
+pub fn statement_at(sql: &str, dialect: Dialect, cursor: usize) -> Option<Statement<'_>> {
+    let statements = split(sql, dialect);
+    statements
+        .iter()
+        .rev()
+        .find(|s| s.start <= cursor)
+        .or_else(|| statements.first())
+        .copied()
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_statement_at_the_cursor_is_the_one_it_is_in_or_just_after() {
+        let sql = "  select 1;\n\nselect 2;  -- tail\n";
+        let at = |cursor| statement_at(sql, Dialect::Postgres, cursor).map(|s| s.text);
+        assert_eq!(at(0), Some("select 1"));
+        assert_eq!(at(5), Some("select 1"));
+        assert_eq!(at(11), Some("select 1"));
+        assert_eq!(at(13), Some("select 2"));
+        assert_eq!(at(sql.len()), Some("select 2"));
+        assert_eq!(statement_at("  ", Dialect::Postgres, 1), None);
+    }
+
     use super::*;
 
     fn texts(sql: &str, dialect: Dialect) -> Vec<&str> {

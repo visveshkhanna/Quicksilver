@@ -6,4 +6,4 @@
 
 pub mod split;
 
-pub use split::{Dialect, Statement, split};
+pub use split::{Dialect, Statement, split, statement_at};
