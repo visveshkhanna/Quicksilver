@@ -14,6 +14,11 @@ qs-core.workspace = true
 # no C toolchain or CMake needed on any OS.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 rustls-native-certs = "0.8"
+tokio = { workspace = true, features = ["process", "io-util", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "process", "io-util", "time"] }
 
 [lints]
 workspace = true
