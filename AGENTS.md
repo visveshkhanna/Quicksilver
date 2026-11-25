@@ -82,7 +82,15 @@ mongodb://quicksilver:quicksilver@127.0.0.1:17017/quicksilver_dev?authSource=adm
 redis://:quicksilver@127.0.0.1:16379/0
 ```
 
-Live tests are `#[ignore]`d and read these URLs from the environment.
+Live tests are `#[ignore]`d and default to these URLs; set
+`QS_TEST_POSTGRES_URL` to point the Postgres ones elsewhere. Every driver must
+pass the shared checks in `crates/qs-drivers/tests/conformance.rs`.
+
+To measure streaming speed and memory:
+
+```sh
+cargo run --release -p qs-service --example bench -- [URL] [ROWS]
+```
 
 ## Versions and releases
 
