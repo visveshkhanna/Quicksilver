@@ -26,6 +26,10 @@ thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 tracing = "0.1"
 
+# One rusqlite for the whole workspace: it bundles SQLite, and two copies of
+# the bundled library cannot be linked into one binary.
+rusqlite = { version = "0.43", default-features = false, features = ["bundled"] }
+
 tauri = { version = "~2.11", features = [] }
 tauri-build = { version = "~2.6", features = [] }
 

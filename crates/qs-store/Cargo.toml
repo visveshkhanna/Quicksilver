@@ -1,6 +1,6 @@
 [package]
 name = "qs-store"
-description = "Profiles, keychain, history and layout state"
+description = "Profiles, keychain passwords, history, buffers, layout and the catalog cache"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,6 +10,15 @@ publish = false
 
 [dependencies]
 qs-core.workspace = true
+keyring = "4.2"
+rusqlite = { workspace = true, features = ["cache"] }
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+uuid = { version = "1.29", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3.27"
 
 [lints]
 workspace = true

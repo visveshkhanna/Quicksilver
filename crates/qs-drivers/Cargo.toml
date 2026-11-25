@@ -28,7 +28,7 @@ tokio-postgres-rustls = { version = "0.14", optional = true, default-features = 
 # `bundled` compiles SQLite into the binary so every OS gets the same version.
 # `column_metadata` names the table and column a result column comes from,
 # which phase 6 needs to decide whether a cell can be edited.
-rusqlite = { version = "0.43", optional = true, default-features = false, features = ["bundled", "column_decltype", "column_metadata"] }
+rusqlite = { workspace = true, optional = true, features = ["column_decltype", "column_metadata"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
