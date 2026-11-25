@@ -51,7 +51,10 @@ export type Column = {
 
 /** `qs_core::Error`. */
 export type QsError =
-  | { kind: 'config' | 'connect' | 'tls' | 'unsupported' | 'internal'; message: string }
+  | {
+      kind: 'config' | 'connect' | 'passwordNeeded' | 'tls' | 'unsupported' | 'storage' | 'internal'
+      message: string
+    }
   | { kind: 'query'; message: string; code: string | null; position: number | null; detail: string | null }
   | { kind: 'cancelled' }
   | { kind: 'closed' }

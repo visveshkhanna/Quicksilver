@@ -25,6 +25,13 @@ pub enum Error {
         /// The driver's description.
         message: String,
     },
+    /// The connection needs a password and none is saved. The UI asks for
+    /// one and connects again with it.
+    #[error("{message}")]
+    PasswordNeeded {
+        /// Which connection, in words.
+        message: String,
+    },
     /// TLS could not be set up the way the connection asked for.
     #[error("{message}")]
     Tls {
@@ -54,6 +61,12 @@ pub enum Error {
     #[error("{message}")]
     Unsupported {
         /// What is not supported.
+        message: String,
+    },
+    /// Quicksilver's own files, database or the OS keychain failed.
+    #[error("{message}")]
+    Storage {
+        /// What failed, and where.
         message: String,
     },
     /// Anything else, with the underlying message.
@@ -99,6 +112,13 @@ impl Error {
     /// A [`Error::Unsupported`] with this message.
     pub fn unsupported(message: impl Into<String>) -> Self {
         Error::Unsupported {
+            message: message.into(),
+        }
+    }
+
+    /// A [`Error::Storage`] with this message.
+    pub fn storage(message: impl Into<String>) -> Self {
+        Error::Storage {
             message: message.into(),
         }
     }
