@@ -63,6 +63,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace                     # no database needed
 cargo test --workspace -- --ignored        # live tests, needs dev/compose.yaml up
+cargo test -p qs-store -- --ignored       # round-trips the real OS keychain
 pnpm tauri build                           # installers in target/release/bundle
 ```
 
@@ -85,6 +86,21 @@ redis://:quicksilver@127.0.0.1:16379/0
 Live tests are `#[ignore]`d and default to these URLs; set
 `QS_TEST_POSTGRES_URL` to point the Postgres ones elsewhere. Every driver must
 pass the shared checks in `crates/qs-drivers/tests/conformance.rs`.
+
+## Where the app keeps its data
+
+The OS's per-app data directory for `dev.visvesh.quicksilver` (on macOS
+`~/Library/Application Support/dev.visvesh.quicksilver`), with a `dev/`
+subdirectory for debug builds:
+
+```text
+profiles.json   saved connections, never passwords
+state.db        history, saved queries, tab buffers, layout, catalog cache
+```
+
+Passwords are in the OS keychain under the service `Quicksilver` (or
+`Quicksilver (dev)`), one entry per profile id. A file that cannot be read is
+renamed to `<name>.corrupt-<millis>` and reported once in the UI.
 
 To measure streaming speed and memory:
 

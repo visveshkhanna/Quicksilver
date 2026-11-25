@@ -20,6 +20,16 @@ All notable changes are recorded here. The format follows
   connect, run, cancel, page through results and read the catalog.
 - A conformance suite every driver must pass, and a 1M-row benchmark
   (`cargo run --release -p qs-service --example bench`).
+- Saved connections with projects and marker colours, in `profiles.json`. A
+  file that cannot be read is moved aside and kept; one written by a newer
+  version is never rewritten.
+- Passwords in the OS keychain (Keychain Services, Credential Manager, Secret
+  Service), or from a password command such as
+  `aws rds generate-db-auth-token`, run without a shell.
+- History, saved queries, editor tab buffers, layout state and a catalog
+  cache for the `Mod+K` switcher, in `state.db`.
+- Development builds keep their data and keychain entries apart from the
+  installed app.
 
 ## [0.0.1] - 2026-11-25
 
