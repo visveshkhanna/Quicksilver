@@ -30,6 +30,22 @@ All notable changes are recorded here. The format follows
   cache for the `Mod+K` switcher, in `state.db`.
 - Development builds keep their data and keychain entries apart from the
   installed app.
+- The app shell:
+  - A navigator with every connection, grouped by project. It expands
+    lazily to databases, schemas, tables, views, functions, sequences and
+    columns, and has a filter and context menus.
+  - A connection form with Paste URL, Test, a password from the keychain or
+    a command, TLS mode, colour, project and mode.
+- Read-only connections are enforced by the database connection itself:
+  SQLite opens the file read-only, and Postgres starts every transaction
+  read-only.
+- `Mod+K` switches the tab's database by fuzzy search, most recent first
+  (`Mod+Enter` opens a new tab instead). `Mod+P` goes to a table or view.
+  `Mod+Shift+P` lists every command that can run now, with its shortcut.
+- Tabs are bound to a connection and database, and are restored on launch.
+  Closed tabs can be reopened, and `Mod+1` to `Mod+9` jump to a tab.
+- Every shortcut can be rebound, with conflicts refused.
+- TypeScript types for the UI are generated from the Rust types.
 
 ## [0.0.1] - 2026-11-25
 
