@@ -5,7 +5,8 @@
 //! cargo run --release -p qs-service --example bench -- [URL] [ROWS]
 //! ```
 //!
-//! URL defaults to an in-memory SQLite database and ROWS to 1,000,000. For
+//! URL defaults to an in-memory SQLite database and ROWS to 1,000,000. Set
+//! `QS_BENCH_NO_SORT=1` to stop after streaming and paging. For
 //! peak process memory, run it under `/usr/bin/time -l` (macOS) or
 //! `/usr/bin/time -v` (Linux).
 
@@ -97,6 +98,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let paged = paging.elapsed();
 
+    if std::env::var_os("QS_BENCH_NO_SORT").is_some() {
+        println!(
+            "rows {}, store {:.1} MB, spilled {:.1} MB",
+            info.rows,
+            info.bytes as f64 / 1e6,
+            info.spilled_bytes as f64 / 1e6
+        );
+        return Ok(());
+    }
+    let sorting = Instant::now();
+    service.sort_result(result, Some((1, qs_service::SortDirection::Descending)))?;
+    let sorted = sorting.elapsed();
+    let paging = Instant::now();
+    for i in 0..pages {
+        let offset = (info.rows.saturating_sub(u64::from(page_rows))) * i / pages;
+        service.page(result, offset, page_rows)?;
+    }
+    let sorted_paged = paging.elapsed();
+
     println!("engine          {}", config.engine.display_name());
     println!("connect         {connected:.2?}");
     println!("rows            {}", info.rows);
@@ -114,9 +134,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info.bytes as f64 / info.rows.max(1) as f64
     );
     println!(
+        "spilled         {:.1} MB to a temporary file",
+        info.spilled_bytes as f64 / 1e6
+    );
+    println!(
         "page fetch      {:.1?} per {page_rows}-row page  ({:.1} KB each)",
         paged / pages as u32,
         bytes as f64 / pages as f64 / 1e3
+    );
+    println!("sort            {sorted:.2?} by a text column");
+    println!(
+        "sorted fetch    {:.1?} per {page_rows}-row page",
+        sorted_paged / pages as u32
     );
     Ok(())
 }

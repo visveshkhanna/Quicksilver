@@ -24,6 +24,7 @@ use qs_drivers::{Connection, ResultSink, RowView};
 use serde::Serialize;
 
 use crate::store::ResultStore;
+pub use crate::store::{SortDirection, SpillPolicy};
 
 /// The most rows one page may hold, so a single fetch stays small.
 pub const MAX_PAGE_ROWS: u32 = 10_000;
@@ -168,6 +169,8 @@ pub struct ResultInfo {
     pub rows: u64,
     /// Approximate memory held, in bytes.
     pub bytes: u64,
+    /// Cell text moved to a temporary file, in bytes.
+    pub spilled_bytes: u64,
 }
 
 /// The database a connection made with `config` lands in.
@@ -236,12 +239,21 @@ struct State {
 pub struct Service {
     state: Arc<Mutex<State>>,
     next_id: Arc<AtomicU64>,
+    spill: Arc<SpillPolicy>,
 }
 
 impl Service {
-    /// An empty service.
+    /// An empty service, spilling large results by the default policy.
     pub fn new() -> Self {
         Service::default()
+    }
+
+    /// An empty service that spills large results by `policy`.
+    pub fn with_spill(policy: SpillPolicy) -> Self {
+        Service {
+            spill: Arc::new(policy),
+            ..Service::default()
+        }
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
@@ -355,6 +367,11 @@ impl Service {
             .connection
             .execute(script, options, &mut sink, cancel)
             .await;
+        // A failed or cancelled statement's rows are complete too: nothing
+        // more will arrive, so they can be sorted.
+        if let Some((_, store)) = &sink.current {
+            store.finish();
+        }
         let (index, failed) = (sink.index, sink.failed.take());
         match failed.map_or(result, Err) {
             Ok(()) => events(RunEvent::Finished {
@@ -392,7 +409,14 @@ impl Service {
             columns: store.columns().to_vec(),
             rows: store.row_count(),
             bytes: store.bytes(),
+            spilled_bytes: store.spilled_bytes(),
         })
+    }
+
+    /// Sorts what a finished result's pages return by `column`, or restores
+    /// arrival order with `None`.
+    pub fn sort_result(&self, result: ResultId, by: Option<(usize, SortDirection)>) -> Result<()> {
+        self.result(result)?.sort(by)
     }
 
     /// Frees a result.
@@ -449,7 +473,10 @@ impl<F: Fn(RunEvent) + Send + Sync> ResultSink for ServiceSink<'_, F> {
 
     fn columns(&mut self, columns: Vec<Column>) {
         let id = self.service.id();
-        let store = Arc::new(ResultStore::new(columns.clone()));
+        let store = Arc::new(ResultStore::with_policy(
+            columns.clone(),
+            SpillPolicy::clone(&self.service.spill),
+        ));
         self.service.state().results.insert(id, store.clone());
         self.current = Some((id, store));
         self.last_progress = Instant::now();
@@ -481,6 +508,9 @@ impl<F: Fn(RunEvent) + Send + Sync> ResultSink for ServiceSink<'_, F> {
     }
 
     fn statement_finished(&mut self, outcome: StatementOutcome) {
+        if let Some((_, store)) = &self.current {
+            store.finish();
+        }
         (self.events)(RunEvent::StatementFinished {
             index: self.index.unwrap_or_default(),
             result_id: self.current.as_ref().map(|(id, _)| *id),

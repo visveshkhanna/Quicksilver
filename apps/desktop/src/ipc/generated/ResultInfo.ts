@@ -16,4 +16,8 @@ rows: number,
 /**
  * Approximate memory held, in bytes.
  */
-bytes: number, };
+bytes: number, 
+/**
+ * Cell text moved to a temporary file, in bytes.
+ */
+spilledBytes: number, };
