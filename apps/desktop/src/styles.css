@@ -1,0 +1,52 @@
+@import "tailwindcss";
+
+/*
+ * One light and one dark palette, picked by the OS setting. There is no theme
+ * picker by design; every colour the UI uses is one of these tokens.
+ */
+@theme {
+  --color-bg: #ffffff;
+  --color-panel: #f6f7f9;
+  --color-raised: #eceef2;
+  --color-border: #d9dce3;
+  --color-fg: #1b1f27;
+  --color-muted: #646b7a;
+  --color-accent: #3b6cf6;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #15171c;
+    --color-panel: #1b1e24;
+    --color-raised: #252931;
+    --color-border: #2f343e;
+    --color-fg: #e4e7ee;
+    --color-muted: #8b93a3;
+    --color-accent: #6b93ff;
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: default;
+}
+
+input,
+textarea {
+  user-select: text;
+}

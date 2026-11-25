@@ -1,0 +1,32 @@
+{
+  "name": "@quicksilver/desktop",
+  "version": "0.0.1",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "dev:web": "vite",
+    "build:web": "tsc --noEmit && vite build",
+    "build": "tauri build",
+    "tauri": "tauri",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "~2.11.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-resizable-panels": "^4.24.2"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.5",
+    "@tauri-apps/cli": "~2.11.5",
+    "@types/react": "^19.3.1",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "tailwindcss": "^4.3.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.1"
+  }
+}
