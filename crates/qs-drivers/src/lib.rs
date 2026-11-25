@@ -198,6 +198,17 @@ pub struct Plan {
     pub raw: String,
 }
 
+/// The table column a result column comes from, by name.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SourceColumn {
+    /// The table's schema (`main` on SQLite).
+    pub schema: String,
+    /// The table.
+    pub table: String,
+    /// The column in that table.
+    pub column: String,
+}
+
 /// An open connection to one database.
 pub enum Connection {
     /// PostgreSQL.
@@ -291,6 +302,31 @@ impl Connection {
             Connection::Postgres(conn) => conn.columns(schema, table).await,
             #[cfg(feature = "sqlite")]
             Connection::Sqlite(conn) => conn.columns(schema, table).await,
+        }
+    }
+
+    /// Where each result column comes from, by name, when it is a plain
+    /// table column; `None` for computed ones.
+    pub async fn resolve_sources(&self, columns: &[Column]) -> Result<Vec<Option<SourceColumn>>> {
+        match self {
+            #[cfg(feature = "postgres")]
+            Connection::Postgres(conn) => conn.resolve_sources(columns).await,
+            #[cfg(feature = "sqlite")]
+            Connection::Sqlite(_) => Ok(columns
+                .iter()
+                .map(|c| match &c.source {
+                    Some(qs_core::ColumnSource::Named {
+                        schema,
+                        table,
+                        column,
+                    }) => Some(SourceColumn {
+                        schema: schema.clone().unwrap_or_else(|| "main".to_owned()),
+                        table: table.clone(),
+                        column: column.clone(),
+                    }),
+                    _ => None,
+                })
+                .collect()),
         }
     }
 

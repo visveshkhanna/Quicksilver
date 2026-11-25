@@ -313,6 +313,60 @@ impl PgConnection {
             .collect())
     }
 
+    pub(crate) async fn resolve_sources(
+        &self,
+        columns: &[Column],
+    ) -> Result<Vec<Option<crate::SourceColumn>>> {
+        let wanted: Vec<(u32, i16)> = columns
+            .iter()
+            .filter_map(|c| match c.source {
+                Some(ColumnSource::PostgresAttribute {
+                    table_oid,
+                    column_id,
+                }) => Some((table_oid, column_id)),
+                _ => None,
+            })
+            .collect();
+        if wanted.is_empty() {
+            return Ok(vec![None; columns.len()]);
+        }
+        let oids: Vec<u32> = wanted.iter().map(|(oid, _)| *oid).collect();
+        let rows = self
+            .client
+            .query(
+                "SELECT a.attrelid, a.attnum, n.nspname::text, c.relname::text, a.attname::text \
+                 FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid \
+                 JOIN pg_namespace n ON n.oid = c.relnamespace \
+                 WHERE a.attrelid = ANY($1) AND a.attnum > 0 AND NOT a.attisdropped",
+                &[&oids],
+            )
+            .await
+            .map_err(query_err)?;
+        let found: std::collections::HashMap<(u32, i16), crate::SourceColumn> = rows
+            .into_iter()
+            .map(|row| {
+                (
+                    (row.get::<_, u32>(0), row.get::<_, i16>(1)),
+                    crate::SourceColumn {
+                        schema: row.get(2),
+                        table: row.get(3),
+                        column: row.get(4),
+                    },
+                )
+            })
+            .collect();
+        Ok(columns
+            .iter()
+            .map(|c| match c.source {
+                Some(ColumnSource::PostgresAttribute {
+                    table_oid,
+                    column_id,
+                }) => found.get(&(table_oid, column_id)).cloned(),
+                _ => None,
+            })
+            .collect())
+    }
+
     pub(crate) async fn foreign_keys(&self, schema: &str) -> Result<Vec<ForeignKey>> {
         let rows = self
             .client

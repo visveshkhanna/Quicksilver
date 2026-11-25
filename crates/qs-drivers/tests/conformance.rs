@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 
 use qs_core::{Column, ConnectionConfig, Engine, Error, TypeTag};
 use qs_drivers::{
-    CancellationToken, Connection, ExecuteOptions, ObjectKind, ResultSink, RowView, Span,
-    StatementOutcome,
+    CancellationToken, Connection, ExecuteOptions, ObjectKind, ResultSink, RowView, SourceColumn,
+    Span, StatementOutcome,
 };
 
 // ---------------------------------------------------------------------------
@@ -337,6 +337,26 @@ async fn catalog_lists_what_was_created(conn: &Connection, dialect: &Dialect) {
         cells(&count.only().rows[0]),
         [Some("1")],
         "explain ran nothing"
+    );
+
+    // Result columns resolve to the table columns they come from.
+    let out = run_ok(
+        conn,
+        &format!("SELECT note AS renamed, id + 1 AS computed FROM {schema}.qs_parent"),
+    )
+    .await;
+    let columns = out.only().columns.clone().expect("columns");
+    let sources = conn.resolve_sources(&columns).await.expect("sources");
+    assert_eq!(
+        sources,
+        [
+            Some(SourceColumn {
+                schema: schema.clone(),
+                table: "qs_parent".to_owned(),
+                column: "note".to_owned(),
+            }),
+            None
+        ]
     );
 
     // DDL reads back what was created.
