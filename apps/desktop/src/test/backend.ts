@@ -7,26 +7,35 @@ import type { CatalogEntry, Profile, ProfileFields } from '../ipc/store'
 import type { Column, RunEvent } from '../ipc/types'
 
 /** Encodes rows as the Rust side's binary page (see `src/ipc/page.ts`). */
-export function encodePage(offset: number, rows: (string | null)[][], width: number): ArrayBuffer {
+export function encodePage(
+  offset: number,
+  rows: (string | null)[][],
+  width: number,
+  sources: number[] = rows.map((_, i) => offset + i),
+): ArrayBuffer {
   const encoder = new TextEncoder()
-  const cells = rows.flatMap((row) => row.map((c) => (c === null ? null : encoder.encode(c))))
-  const size = 20 + cells.reduce((n, c) => n + 4 + (c?.length ?? 0), 0)
+  const encoded = rows.map((row) => row.map((c) => (c === null ? null : encoder.encode(c))))
+  const size = 20 + encoded.reduce((n, row) => n + 8 + row.reduce((m, c) => m + 4 + (c?.length ?? 0), 0), 0)
   const buffer = new ArrayBuffer(size)
   const view = new DataView(buffer)
   const bytes = new Uint8Array(buffer)
-  bytes.set([0x51, 0x53, 0x50, 0x31])
+  bytes.set([0x51, 0x53, 0x50, 0x32])
   view.setUint32(4, rows.length, true)
   view.setUint32(8, width, true)
   view.setBigUint64(12, BigInt(offset), true)
   let at = 20
-  for (const c of cells) {
-    view.setUint32(at, c === null ? 0xffffffff : c.length, true)
-    at += 4
-    if (c) {
-      bytes.set(c, at)
-      at += c.length
+  encoded.forEach((row, r) => {
+    view.setBigUint64(at, BigInt(sources[r] ?? offset + r), true)
+    at += 8
+    for (const c of row) {
+      view.setUint32(at, c === null ? 0xffffffff : c.length, true)
+      at += 4
+      if (c) {
+        bytes.set(c, at)
+        at += c.length
+      }
     }
-  }
+  })
   return buffer
 }
 
@@ -226,10 +235,9 @@ export function fakeBackend({
         const r = results.get(args.result as number)
         if (!r) throw { kind: 'config', message: 'no result' }
         const offset = args.offset as number
-        const picked = r.order
-          .slice(offset, offset + (args.count as number))
-          .map((i) => r.rows[i] as (string | null)[])
-        return encodePage(offset, picked, r.columns.length)
+        const order = r.order.slice(offset, offset + (args.count as number))
+        const picked = order.map((i) => r.rows[i] as (string | null)[])
+        return encodePage(offset, picked, r.columns.length, order)
       }
       case 'sort_result': {
         const r = results.get(args.result as number)

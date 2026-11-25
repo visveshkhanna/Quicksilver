@@ -38,7 +38,7 @@ const CHUNK_TEXT_BYTES: usize = 16 * 1024 * 1024;
 pub const NULL_LENGTH: u32 = u32::MAX;
 
 /// The first four bytes of every page.
-pub const PAGE_MAGIC: &[u8; 4] = b"QSP1";
+pub const PAGE_MAGIC: &[u8; 4] = b"QSP2";
 
 /// When a result's rows move from memory to a temporary file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -510,7 +510,7 @@ impl ResultStore {
         if let Some(&bad) = columns.iter().find(|&&c| c >= self.columns.len()) {
             return Err(Error::config(format!("no column {bad}")));
         }
-        self.visit(offset, count, columns, |row| {
+        self.visit(offset, count, columns, |_, row| {
             let cells: Vec<Option<&str>> = row
                 .iter()
                 .map(|cell| {
@@ -522,14 +522,37 @@ impl ResultStore {
         })
     }
 
-    /// Calls `f` with the raw cells of displayed rows `offset .. offset +
-    /// count`, restricted to `columns`.
+    /// The cells of source row `row` (its place in arrival order), as text.
+    pub fn source_row(&self, row: u64) -> Result<Vec<Option<String>>> {
+        let data = self.read()?;
+        if row >= data.rows {
+            return Err(Error::config(format!("no row {row}")));
+        }
+        let index = data.starts.partition_point(|&start| start <= row) - 1;
+        let chunk = &data.chunks[index];
+        let local = (row - data.starts[index]) as usize;
+        let file = data.file.as_deref();
+        chunk
+            .columns
+            .iter()
+            .map(|column| {
+                if column.is_null(local) {
+                    return Ok(None);
+                }
+                let text = column.text_range(file, local, local + 1)?;
+                Ok(Some(String::from_utf8_lossy(&text).into_owned()))
+            })
+            .collect()
+    }
+
+    /// Calls `f` with the source row number and raw cells of displayed rows
+    /// `offset .. offset + count`, restricted to `columns`.
     fn visit(
         &self,
         offset: u64,
         count: u64,
         columns: &[usize],
-        mut f: impl FnMut(&[Option<&[u8]>]),
+        mut f: impl FnMut(u64, &[Option<&[u8]>]),
     ) -> Result<()> {
         let data = self.read()?;
         let end = offset.saturating_add(count).min(data.rows);
@@ -571,7 +594,7 @@ impl ResultStore {
                                 )
                             });
                         }
-                        f(&row);
+                        f(base + local as u64, &row);
                     }
                     at = base + to as u64;
                     index += 1;
@@ -592,7 +615,7 @@ impl ResultStore {
                         .zip(columns)
                         .map(|(text, &c)| (!chunk.columns[c].is_null(local)).then_some(&text[..]))
                         .collect();
-                    f(&row);
+                    f(source, &row);
                 }
             }
         }
@@ -603,11 +626,14 @@ impl ResultStore {
     /// exists) as a page:
     ///
     /// ```text
-    /// "QSP1"                   4 bytes
+    /// "QSP2"                   4 bytes
     /// row count     u32 LE     rows in this page
     /// column count  u32 LE
     /// first row     u64 LE     the offset asked for
-    /// cells, row by row: length u32 LE (0xFFFFFFFF for NULL), then UTF-8 bytes
+    /// then, row by row:
+    ///   source row  u64 LE     the row's place in arrival order, which
+    ///                          edits name it by whatever the sort
+    ///   cells: length u32 LE (0xFFFFFFFF for NULL), then UTF-8 bytes
     /// ```
     pub fn page(&self, offset: u64, count: u32) -> Result<Vec<u8>> {
         let width = self.columns.len();
@@ -618,8 +644,9 @@ impl ResultStore {
         out.extend_from_slice(&(width as u32).to_le_bytes());
         out.extend_from_slice(&offset.to_le_bytes());
         let mut rows = 0u32;
-        self.visit(offset, u64::from(count), &all, |row| {
+        self.visit(offset, u64::from(count), &all, |source, row| {
             rows += 1;
+            out.extend_from_slice(&source.to_le_bytes());
             for cell in row {
                 match cell {
                     None => out.extend_from_slice(&NULL_LENGTH.to_le_bytes()),
@@ -741,6 +768,7 @@ mod tests {
         let mut at = 20;
         let mut out = Vec::new();
         for _ in 0..rows {
+            at += 8;
             let mut row = Vec::new();
             for _ in 0..width {
                 let len = u32_at(at);
@@ -766,9 +794,10 @@ mod tests {
         s.push(&Row(vec![Some("ab"), None])).expect("push");
         let page = s.page(0, 10).expect("page");
         let expected: Vec<u8> = [
-            b"QSP1".as_slice(),
+            b"QSP2".as_slice(),
             &1u32.to_le_bytes(),
             &2u32.to_le_bytes(),
+            &0u64.to_le_bytes(),
             &0u64.to_le_bytes(),
             &2u32.to_le_bytes(),
             b"ab",
@@ -994,6 +1023,34 @@ mod tests {
         .expect("rows");
         assert_eq!(got, [Some("c".into()), Some("a".into()), None]);
         assert!(s.rows(0, 1, &[3], |_| {}).is_err());
+    }
+
+    #[test]
+    fn pages_carry_each_rows_source_and_source_rows_read_back() {
+        let s = typed(&[TypeTag::Integer, TypeTag::Text], SpillPolicy::default());
+        for (n, t) in [("3", Some("c")), ("1", None), ("2", Some("b"))] {
+            s.push(&Owned(vec![Some(n.to_owned()), t.map(str::to_owned)])).expect("push");
+        }
+        s.finish();
+        s.sort(Some((0, SortDirection::Ascending))).expect("sort");
+        let page = s.page(0, 3).expect("page");
+        let sources: Vec<u64> = {
+            // Row by row: 8 bytes of source, then two cells.
+            let mut at = 20;
+            let mut out = Vec::new();
+            for _ in 0..3 {
+                out.push(u64::from_le_bytes(page[at..at + 8].try_into().expect("8")));
+                at += 8;
+                for _ in 0..2 {
+                    let len = u32::from_le_bytes(page[at..at + 4].try_into().expect("4"));
+                    at += 4 + if len == NULL_LENGTH { 0 } else { len as usize };
+                }
+            }
+            out
+        };
+        assert_eq!(sources, [1, 2, 0]);
+        assert_eq!(s.source_row(1).expect("row"), [Some("1".to_owned()), None]);
+        assert!(s.source_row(3).is_err());
     }
 
     #[test]

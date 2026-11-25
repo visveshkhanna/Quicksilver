@@ -87,6 +87,7 @@ describe('PageCache', () => {
     offset,
     columnCount: 1,
     rows: Array.from({ length: count }, (_, i) => [String(offset + i)]),
+    sources: Array.from({ length: count }, (_, i) => 1000 + offset + i),
   })
 
   it('fetches each missing page once and serves rows from it', async () => {
@@ -99,6 +100,8 @@ describe('PageCache', () => {
       [PAGE_ROWS, PAGE_ROWS],
     ])
     expect(cache.row(299)).toEqual(['299'])
+    expect(cache.source(299)).toBe(1299)
+    expect(cache.source(600)).toBeUndefined()
     expect(cache.row(600)).toBeUndefined()
     expect(onLoad).toHaveBeenCalledTimes(2)
   })

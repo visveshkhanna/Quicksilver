@@ -30,6 +30,12 @@ export class PageCache {
     return entry.page.rows[index - entry.page.offset]
   }
 
+  /** The row's place in arrival order (what edits name it by), if its page is here. */
+  source(index: number): number | undefined {
+    const entry = this.pages.get(Math.floor(index / PAGE_ROWS))
+    return entry?.page.sources[index - entry.page.offset]
+  }
+
   /**
    * Fetches the pages covering rows `[first, end)` that are missing, or
    * that were short because the result was still growing and now has more

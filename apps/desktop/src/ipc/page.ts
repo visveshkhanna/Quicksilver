@@ -1,14 +1,16 @@
 /**
  * Decodes the binary pages `qs_service::store::ResultStore::page` writes:
  *
- *   "QSP1"                  4 bytes
+ *   "QSP2"                  4 bytes
  *   row count     u32 LE
  *   column count  u32 LE
  *   first row     u64 LE
- *   cells, row by row: length u32 LE (0xFFFFFFFF for NULL), then UTF-8 bytes
+ *   then, row by row:
+ *     source row  u64 LE    the row's place in arrival order, whatever the sort
+ *     cells: length u32 LE (0xFFFFFFFF for NULL), then UTF-8 bytes
  */
 
-const MAGIC = [0x51, 0x53, 0x50, 0x31] // "QSP1"
+const MAGIC = [0x51, 0x53, 0x50, 0x32] // "QSP2"
 const NULL_LENGTH = 0xffffffff
 const HEADER_BYTES = 20
 
@@ -18,6 +20,8 @@ export type Page = {
   columnCount: number
   /** Row by row; `null` is SQL NULL. */
   rows: (string | null)[][]
+  /** Each row's place in arrival order, which edits name it by. */
+  sources: number[]
 }
 
 const decoder = new TextDecoder('utf-8')
@@ -33,8 +37,12 @@ export function decodePage(buffer: ArrayBuffer): Page {
   const offset = Number(view.getBigUint64(12, true))
 
   const rows: (string | null)[][] = new Array(rowCount)
+  const sources: number[] = new Array(rowCount)
   let at = HEADER_BYTES
   for (let r = 0; r < rowCount; r++) {
+    if (at + 8 > buffer.byteLength) throw new Error('page ends inside a row number')
+    sources[r] = Number(view.getBigUint64(at, true))
+    at += 8
     const row: (string | null)[] = new Array(columnCount)
     for (let c = 0; c < columnCount; c++) {
       if (at + 4 > buffer.byteLength) throw new Error('page ends inside a cell length')
@@ -51,5 +59,5 @@ export function decodePage(buffer: ArrayBuffer): Page {
     rows[r] = row
   }
   if (at !== buffer.byteLength) throw new Error('page has trailing bytes')
-  return { offset, columnCount, rows }
+  return { offset, columnCount, rows, sources }
 }
