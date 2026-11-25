@@ -1,0 +1,116 @@
+# Development databases, one per engine, on fixed ports chosen to stay clear of
+# anything already installed locally. Start them with:
+#
+#   docker compose -f dev/compose.yaml up -d            # everything
+#   docker compose -f dev/compose.yaml up -d postgres   # just one
+#
+# Every server accepts user `quicksilver`, password `quicksilver`, database
+# `quicksilver_dev`, except SQL Server, whose password policy needs
+# `Quicksilver_dev1`. The connection URLs are listed in AGENTS.md.
+
+name: quicksilver-dev
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: quicksilver
+      POSTGRES_PASSWORD: quicksilver
+      POSTGRES_DB: quicksilver_dev
+    ports: ["127.0.0.1:15432:5432"]
+    volumes: ["./seed/postgres:/docker-entrypoint-initdb.d:ro"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quicksilver -d quicksilver_dev"]
+      interval: 2s
+      retries: 30
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_USER: quicksilver
+      MYSQL_PASSWORD: quicksilver
+      MYSQL_ROOT_PASSWORD: quicksilver
+      MYSQL_DATABASE: quicksilver_dev
+    ports: ["127.0.0.1:13306:3306"]
+    volumes: ["./seed/mysql:/docker-entrypoint-initdb.d:ro"]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uquicksilver", "-pquicksilver"]
+      interval: 2s
+      retries: 60
+
+  mariadb:
+    image: mariadb:11
+    environment:
+      MARIADB_USER: quicksilver
+      MARIADB_PASSWORD: quicksilver
+      MARIADB_ROOT_PASSWORD: quicksilver
+      MARIADB_DATABASE: quicksilver_dev
+    ports: ["127.0.0.1:13307:3306"]
+    volumes: ["./seed/mysql:/docker-entrypoint-initdb.d:ro"]
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 2s
+      retries: 60
+
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    platform: linux/amd64
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: Quicksilver_dev1
+    ports: ["127.0.0.1:11433:1433"]
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P Quicksilver_dev1 -Q "SELECT 1" -b
+      interval: 5s
+      retries: 40
+
+  # SQL Server's image runs no init scripts, so this one-shot container seeds it
+  # once the server is healthy.
+  mssql-seed:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    platform: linux/amd64
+    depends_on:
+      mssql:
+        condition: service_healthy
+    volumes: ["./seed/mssql:/seed:ro"]
+    entrypoint:
+      - /opt/mssql-tools18/bin/sqlcmd
+      - -C
+      - -S
+      - mssql
+      - -U
+      - sa
+      - -P
+      - Quicksilver_dev1
+      - -b
+      - -i
+      - /seed/seed.sql
+    restart: "no"
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.8
+    environment:
+      CLICKHOUSE_USER: quicksilver
+      CLICKHOUSE_PASSWORD: quicksilver
+      CLICKHOUSE_DB: quicksilver_dev
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports: ["127.0.0.1:18123:8123"]
+    volumes: ["./seed/clickhouse:/docker-entrypoint-initdb.d:ro"]
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+
+  mongodb:
+    image: mongo:8
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: quicksilver
+      MONGO_INITDB_ROOT_PASSWORD: quicksilver
+      MONGO_INITDB_DATABASE: quicksilver_dev
+    ports: ["127.0.0.1:17017:27017"]
+    volumes: ["./seed/mongodb:/docker-entrypoint-initdb.d:ro"]
+
+  redis:
+    image: redis:8
+    command: ["redis-server", "--requirepass", "quicksilver"]
+    ports: ["127.0.0.1:16379:6379"]
