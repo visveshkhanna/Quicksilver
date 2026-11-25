@@ -1,5 +1,9 @@
 //! SQL handling for Quicksilver.
 //!
-//! Splits a buffer into statements, generates the SQL Quicksilver writes for
-//! the user (cell edits, sorts, filters) and checks every generated statement
-//! against a parse-tree whitelist before it can run. Filled in from phase 5.
+//! Splits a buffer into statements today. Generating the SQL Quicksilver
+//! writes for the user (cell edits, sorts, filters) and the parse-tree gates
+//! that check it arrive in phases 5 and 6.
+
+pub mod split;
+
+pub use split::{Dialect, Statement, split};
