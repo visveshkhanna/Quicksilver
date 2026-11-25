@@ -102,10 +102,15 @@ Passwords are in the OS keychain under the service `Quicksilver` (or
 `Quicksilver (dev)`), one entry per profile id. A file that cannot be read is
 renamed to `<name>.corrupt-<millis>` and reported once in the UI.
 
-To measure streaming speed and memory:
+Results with more than 64 MB of cell text spill their full chunks to an
+unnamed file in the system temporary directory, which the OS deletes when the
+result closes or the app exits.
+
+To measure streaming, paging, sorting and memory:
 
 ```sh
 cargo run --release -p qs-service --example bench -- [URL] [ROWS]
+QS_BENCH_NO_SORT=1 /usr/bin/time -l cargo run --release -p qs-service --example bench   # peak memory, macOS
 ```
 
 ## Versions and releases
@@ -135,6 +140,11 @@ type the UI receives gets `#[derive(ts_rs::TS)] #[ts(export)]`.
   `unwrap()` outside tests, a doc comment on every public item.
 - TypeScript: strict, Biome-formatted. Every keyboard shortcut is defined in
   `apps/desktop/src/keymap/keymap.ts` and nowhere else; `Mod` means Cmd on
-  macOS and Ctrl elsewhere.
+  macOS and Ctrl elsewhere. App shortcuts listen in the capture phase, so
+  they win over the editor's keys; grid shortcuts have `scope: 'grid'`.
+- UI tests run in jsdom, which has no layout or canvas. Drive the grid with
+  the keyboard and read its live region (`data-testid="grid-cursor"`).
+  Focus inputs rather than clicking them, because the panel separators'
+  hit test takes clicks there.
 - Commits follow Conventional Commits (`feat:`, `fix:`, `docs:`, `ci:`…).
   No AI attribution trailers or "generated with" lines in commits or PRs.

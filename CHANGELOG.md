@@ -46,6 +46,35 @@ All notable changes are recorded here. The format follows
   Closed tabs can be reopened, and `Mod+1` to `Mod+9` jump to a tab.
 - Every shortcut can be rebound, with conflicts refused.
 - TypeScript types for the UI are generated from the Rust types.
+- A CodeMirror SQL editor:
+  - `Mod+Enter` runs the selection, or else the statement under the cursor.
+  - Completion knows the schema: columns after `alias.`, tables after
+    `FROM` and `JOIN`, and whole `JOIN … ON` conditions from foreign keys.
+  - Server error positions are underlined in the text.
+  - `Mod+Shift+F` formats, only when asked, as one undo step.
+- A canvas results grid that pages rows from Rust, so a million rows cost
+  what the screen shows:
+  - Columns can be resized, fitted, pinned, hidden and sorted.
+  - Cells can be selected with the mouse or keyboard and copied as TSV, CSV,
+    JSON or `INSERT` statements.
+  - Each statement's result has its own tab, and a capped result offers to
+    run again without the limit.
+- Results over 64 MB of text spill to a temporary file, so memory stays
+  bounded. Streaming 5M rows peaks at 168 MB.
+- Explain (`Mod+E`) shows the plan as a tree with costs, without running the
+  statement.
+- Tables opened from the navigator or `Mod+P` get a `WHERE` bar. It writes
+  the filtered query into the editor and runs it.
+- Copy DDL for tables, views, routines and sequences.
+
+### Changed
+
+- The row cap is now 100,000 per statement, up from 1,000.
+
+### Fixed
+
+- A cancel request that arrived after a capped statement had finished no
+  longer cancels the next statement.
 
 ## [0.0.1] - 2026-11-25
 
