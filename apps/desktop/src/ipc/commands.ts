@@ -1,6 +1,6 @@
 import { Channel, invoke, isTauri } from '@tauri-apps/api/core'
 import { decodePage, type Page } from './page'
-import type { ColumnInfo, DbObject, ResultInfo, RunEvent, SessionInfo } from './types'
+import type { ColumnInfo, DbObject, Engine, ResultInfo, RunEvent, SessionInfo } from './types'
 
 /** One engine, as `qs-service` describes it. */
 export type EngineInfo = {
@@ -88,4 +88,13 @@ export function listObjects(session: number, schema: string): Promise<DbObject[]
 
 export function listColumns(session: number, schema: string, table: string): Promise<ColumnInfo[]> {
   return invoke('list_columns', { session, schema, table })
+}
+
+/** The statement under the cursor, as UTF-16 offsets into `script`. */
+export function statementAt(
+  script: string,
+  engine: Engine,
+  cursor: number,
+): Promise<{ start: number; end: number } | null> {
+  return invoke('statement_at', { script, engine, cursor })
 }

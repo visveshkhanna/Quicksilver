@@ -80,7 +80,13 @@ export type RunEvent =
   | { event: 'failed'; index: number | null; error: QsError }
 
 /** `qs_service::SessionInfo`. */
-export type SessionInfo = { id: number; engine: Engine }
+export type SessionInfo = {
+  id: number
+  engine: Engine
+  /** The database it landed in, when known. */
+  database: string | null
+  readOnly: boolean
+}
 
 /** `qs_service::ResultInfo`. */
 export type ResultInfo = { columns: Column[]; rows: number; bytes: number }

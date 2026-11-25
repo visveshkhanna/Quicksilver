@@ -2,7 +2,7 @@
 // as calls to the commands in `src-tauri/src/saved.rs`.
 
 import { invoke } from '@tauri-apps/api/core'
-import type { SessionInfo } from './types'
+import type { Engine, SessionInfo } from './types'
 
 /** `qs_core::SslMode`. */
 export type SslMode = 'disable' | 'allow' | 'prefer' | 'require' | 'verify-ca' | 'verify-full'
@@ -16,12 +16,15 @@ export type Auth =
   | { kind: 'keychain' }
   | { kind: 'command'; program: string; args: string[] }
 
+/** `qs_store::Mode`: what a connection may do. */
+export type Mode = 'readOnly' | 'readWrite' | 'full'
+
 /** `qs_store::ProfileFields`: what a person edits about a connection. */
 export type ProfileFields = {
   name: string
   project: string | null
   color: Color | null
-  engine: string
+  engine: Engine
   host: string | null
   port: number | null
   user: string | null
@@ -31,6 +34,7 @@ export type ProfileFields = {
   sslRootCert: string | null
   options: Record<string, string>
   auth: Auth
+  mode: Mode
 }
 
 /** `qs_store::Profile`: a saved connection. */
@@ -114,12 +118,27 @@ export const updateProfile = (
 export const deleteProfile = (id: string): Promise<void> => invoke('delete_profile', { id })
 
 /**
- * Opens a session for a saved connection. Rejects with
- * `{ kind: 'passwordNeeded' }` when it uses the keychain and nothing is
- * saved; call again with the password the user typed.
+ * Opens a session for a saved connection, in `database` or the profile's
+ * own. Rejects with `{ kind: 'passwordNeeded' }` when it uses the keychain
+ * and nothing is saved; call again with the password the user typed.
  */
-export const connectProfile = (id: string, password?: string): Promise<SessionInfo> =>
-  invoke('connect_profile', { id, password: password ?? null })
+export const connectProfile = (
+  id: string,
+  database: string | null = null,
+  password: string | null = null,
+): Promise<SessionInfo> => invoke('connect_profile', { id, database, password })
+
+/** Connects with unsaved form fields and disconnects. */
+export const testConnection = (
+  fields: ProfileFields,
+  id: string | null,
+  password: string | null,
+): Promise<void> => invoke('test_connection', { fields, id, password })
+
+/** A pasted URL, read into form fields. */
+export type ParsedUrl = { fields: ProfileFields; password: string | null }
+
+export const parseUrl = (url: string): Promise<ParsedUrl> => invoke('parse_url', { url })
 
 export const refreshCatalog = (session: number, profileId: string, database: string | null): Promise<void> =>
   invoke('refresh_catalog', { session, profileId, database })
