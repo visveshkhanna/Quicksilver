@@ -13,6 +13,12 @@ qs-core.workspace = true
 qs-drivers.workspace = true
 qs-store.workspace = true
 serde.workspace = true
+tokio = { workspace = true }
+tracing.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [lints]
 workspace = true
