@@ -8,6 +8,7 @@
 //! [`store::ResultStore`] until the UI closes it; the UI reads it a page at a
 //! time with [`Service::page`].
 
+pub mod saved;
 pub mod store;
 
 use std::collections::HashMap;
