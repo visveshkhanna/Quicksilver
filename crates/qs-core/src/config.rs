@@ -94,6 +94,11 @@ pub struct ConnectionConfig {
     pub ssl_root_cert: Option<PathBuf>,
     /// Any other URL query parameters, kept for the driver to interpret.
     pub options: BTreeMap<String, String>,
+    /// Refuse writes. Postgres starts every transaction read-only (a guard
+    /// against accidents; `SET` can lift it). SQLite opens the file
+    /// read-only, which nothing can lift.
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 impl fmt::Debug for ConnectionConfig {
@@ -109,6 +114,7 @@ impl fmt::Debug for ConnectionConfig {
             .field("ssl_mode", &self.ssl_mode)
             .field("ssl_root_cert", &self.ssl_root_cert)
             .field("options", &self.options)
+            .field("read_only", &self.read_only)
             .finish()
     }
 }
@@ -127,6 +133,7 @@ impl ConnectionConfig {
             ssl_mode: SslMode::default(),
             ssl_root_cert: None,
             options: BTreeMap::new(),
+            read_only: false,
         }
     }
 

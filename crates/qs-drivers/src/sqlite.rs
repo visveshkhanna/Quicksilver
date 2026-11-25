@@ -37,7 +37,7 @@ impl SqliteConnection {
             .as_deref()
             .ok_or_else(|| Error::config("an SQLite connection needs a file"))?;
         let option = |key: &str| config.options.get(key).map(String::as_str);
-        let read_only = option("mode") == Some("ro");
+        let read_only = config.read_only || option("mode") == Some("ro");
         let create = option("create") == Some("true");
 
         let conn = if path == Path::new(":memory:") {

@@ -81,6 +81,9 @@ impl PgConnection {
             pg.dbname(database);
         }
         pg.application_name(option("application_name").unwrap_or("Quicksilver"));
+        if config.read_only {
+            pg.options("-c default_transaction_read_only=on");
+        }
         let timeout = option("connect_timeout")
             .and_then(|s| s.parse().ok())
             .unwrap_or(15);

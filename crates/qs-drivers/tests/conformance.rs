@@ -411,6 +411,31 @@ async fn sqlite_refuses_to_create_a_missing_file_unless_asked() {
     let _ = std::fs::remove_file(&path);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn sqlite_read_only_refuses_writes_but_reads() {
+    let path = std::env::temp_dir().join(format!("qs-read-only-{}.db", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let mut config = ConnectionConfig::new(Engine::Sqlite);
+    config.path = Some(path.clone());
+    config.options.insert("create".into(), "true".into());
+    {
+        let writable = Connection::connect(&config).await.expect("creates");
+        run_ok(
+            &writable,
+            "CREATE TABLE t (a INT); INSERT INTO t VALUES (1)",
+        )
+        .await;
+    }
+    config.options.clear();
+    config.read_only = true;
+    let conn = Connection::connect(&config).await.expect("opens");
+    assert_eq!(run_ok(&conn, "SELECT a FROM t").await.only().rows.len(), 1);
+    let (_, result) = run(&conn, "INSERT INTO t VALUES (2)", ALL).await;
+    assert!(matches!(result, Err(Error::Query { .. })), "{result:?}");
+    drop(conn);
+    let _ = std::fs::remove_file(&path);
+}
+
 // ---------------------------------------------------------------------------
 // PostgreSQL (live)
 
@@ -438,6 +463,21 @@ async fn live_postgres_conformance() {
         schema,
     };
     conformance(&postgres().await, &dialect).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs the development Postgres (dev/compose.yaml)"]
+async fn live_postgres_read_only_refuses_writes_but_reads() {
+    let mut config = ConnectionConfig::from_url(&postgres_url()).expect("valid URL");
+    config.read_only = true;
+    let conn = Connection::connect(&config).await.expect("connects");
+    assert_eq!(run_ok(&conn, "SELECT 1").await.only().rows.len(), 1);
+    let (_, result) = run(&conn, "CREATE TEMP TABLE qs_ro (a int)", ALL).await;
+    let Err(Error::Query { code, .. }) = result else {
+        panic!("expected a query error, got {result:?}");
+    };
+    // read_only_sql_transaction
+    assert_eq!(code.as_deref(), Some("25006"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
