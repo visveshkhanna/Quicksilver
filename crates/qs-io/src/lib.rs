@@ -1,2 +1,4 @@
-//! Import and export: CSV, TSV and JSON rows, and connections from other
-//! clients. Filled in in phase 8.
+//! Import and export: rows as TSV, CSV, JSON or SQL, and (in phase 8)
+//! connections from other clients.
+
+pub mod rows;
