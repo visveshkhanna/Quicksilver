@@ -3094,6 +3094,9 @@ name = "qs-io"
 version = "0.0.1"
 dependencies = [
  "qs-core",
+ "serde",
+ "serde_json",
+ "ts-rs",
 ]
 
 [[package]]
@@ -3113,6 +3116,7 @@ version = "0.0.1"
 dependencies = [
  "qs-core",
  "qs-drivers",
+ "qs-io",
  "qs-net",
  "qs-sql",
  "qs-store",

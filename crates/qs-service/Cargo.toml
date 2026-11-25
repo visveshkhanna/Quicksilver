@@ -12,6 +12,7 @@ publish = false
 ts-rs.workspace = true
 qs-core.workspace = true
 qs-drivers.workspace = true
+qs-io.workspace = true
 qs-net.workspace = true
 qs-sql.workspace = true
 qs-store.workspace = true

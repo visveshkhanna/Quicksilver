@@ -10,8 +10,8 @@ use std::sync::Arc;
 use qs_core::{ConnectionConfig, Error};
 use qs_service::saved::HistoryRecorder;
 use qs_service::{
-    AppInfo, ColumnInfo, DbObject, ExecuteOptions, ResultId, ResultInfo, RunEvent, RunId, Service,
-    SessionId, SessionInfo,
+    AppInfo, ColumnInfo, CopyFormat, DbObject, ExecuteOptions, ForeignKey, ObjectKind, Plan,
+    ResultId, ResultInfo, RunEvent, RunId, Service, SessionId, SessionInfo, SortDirection,
 };
 use qs_store::Store;
 use tauri::State;
@@ -95,6 +95,32 @@ pub async fn result_info(service: State<'_, Service>, result: ResultId) -> Resul
     service.result_info(result)
 }
 
+/// Sorts a finished result by a column, or restores arrival order when
+/// `column` is null.
+#[tauri::command]
+pub async fn sort_result(
+    service: State<'_, Service>,
+    result: ResultId,
+    column: Option<usize>,
+    direction: Option<SortDirection>,
+) -> Result<()> {
+    let by = column.map(|c| (c, direction.unwrap_or(SortDirection::Ascending)));
+    service.sort_result(result, by)
+}
+
+/// Rows of a result as text, for the clipboard.
+#[tauri::command]
+pub async fn copy_rows(
+    service: State<'_, Service>,
+    result: ResultId,
+    offset: u64,
+    count: u64,
+    columns: Vec<usize>,
+    format: CopyFormat,
+) -> Result<String> {
+    service.copy_rows(result, offset, count, &columns, format)
+}
+
 /// Frees a result.
 #[tauri::command]
 pub async fn close_result(service: State<'_, Service>, result: ResultId) -> Result<()> {
@@ -136,6 +162,38 @@ pub async fn list_columns(
     table: String,
 ) -> Result<Vec<ColumnInfo>> {
     service.columns(session, &schema, &table).await
+}
+
+/// The foreign keys starting or ending in a schema.
+#[tauri::command]
+pub async fn list_foreign_keys(
+    service: State<'_, Service>,
+    session: SessionId,
+    schema: String,
+) -> Result<Vec<ForeignKey>> {
+    service.foreign_keys(session, &schema).await
+}
+
+/// How the server would run a statement, without running it.
+#[tauri::command]
+pub async fn explain(
+    service: State<'_, Service>,
+    session: SessionId,
+    statement: String,
+) -> Result<Plan> {
+    service.explain(session, &statement).await
+}
+
+/// The SQL that creates an object.
+#[tauri::command]
+pub async fn object_ddl(
+    service: State<'_, Service>,
+    session: SessionId,
+    schema: String,
+    name: String,
+    kind: ObjectKind,
+) -> Result<String> {
+    service.ddl(session, &schema, &name, kind).await
 }
 
 /// Where the statement under the editor cursor starts and ends, in UTF-16

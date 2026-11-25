@@ -18,9 +18,11 @@ use std::time::{Duration, Instant};
 
 use qs_core::{Column, ConnectionConfig, Engine, Error, Result};
 pub use qs_drivers::{
-    CancellationToken, ColumnInfo, DbObject, ExecuteOptions, ObjectKind, Span, StatementOutcome,
+    CancellationToken, ColumnInfo, DbObject, ExecuteOptions, ForeignKey, ObjectKind, Plan,
+    PlanDetail, PlanNode, Span, StatementOutcome,
 };
 use qs_drivers::{Connection, ResultSink, RowView};
+pub use qs_io::rows::Format as CopyFormat;
 use serde::Serialize;
 
 use crate::store::ResultStore;
@@ -28,6 +30,9 @@ pub use crate::store::{SortDirection, SpillPolicy};
 
 /// The most rows one page may hold, so a single fetch stays small.
 pub const MAX_PAGE_ROWS: u32 = 10_000;
+
+/// The most text one copy may produce; past it the UI suggests exporting.
+pub const MAX_COPY_BYTES: usize = 64 * 1024 * 1024;
 
 /// How often a run reports how many rows have arrived.
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
@@ -424,6 +429,51 @@ impl Service {
         self.state().results.remove(&result);
     }
 
+    /// Displayed rows `offset .. offset + count` of a result, restricted to
+    /// `columns` in that order, as text in `format`. Fails past
+    /// [`MAX_COPY_BYTES`].
+    pub fn copy_rows(
+        &self,
+        result: ResultId,
+        offset: u64,
+        count: u64,
+        columns: &[usize],
+        format: CopyFormat,
+    ) -> Result<String> {
+        let store = self.result(result)?;
+        let fields = columns
+            .iter()
+            .map(|&c| {
+                store
+                    .columns()
+                    .get(c)
+                    .map(|column| qs_io::rows::Field {
+                        name: column.name.clone(),
+                        type_tag: column.type_tag,
+                    })
+                    .ok_or_else(|| Error::config(format!("no column {c}")))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut writer = qs_io::rows::RowWriter::new(format, fields, MAX_COPY_BYTES);
+        let mut failed = None;
+        let mut cells: Vec<Option<String>> = Vec::new();
+        store.rows(offset, count, columns, |row| {
+            if failed.is_some() {
+                return;
+            }
+            cells.clear();
+            cells.extend((0..row.len()).map(|i| row.get(i).map(str::to_owned)));
+            let borrowed: Vec<Option<&str>> = cells.iter().map(Option::as_deref).collect();
+            if let Err(err) = writer.row(&borrowed) {
+                failed = Some(err);
+            }
+        })?;
+        match failed {
+            Some(err) => Err(err),
+            None => Ok(writer.finish()),
+        }
+    }
+
     /// The databases on the session's server.
     pub async fn databases(&self, session: SessionId) -> Result<Vec<String>> {
         self.session(session)?.connection.databases().await
@@ -449,6 +499,33 @@ impl Service {
         self.session(session)?
             .connection
             .columns(schema, table)
+            .await
+    }
+
+    /// The foreign keys starting or ending in a schema.
+    pub async fn foreign_keys(&self, session: SessionId, schema: &str) -> Result<Vec<ForeignKey>> {
+        self.session(session)?.connection.foreign_keys(schema).await
+    }
+
+    /// How the server would run one statement, without running it. Waits for
+    /// a running script on the session to finish first.
+    pub async fn explain(&self, session: SessionId, statement: &str) -> Result<Plan> {
+        let session = self.session(session)?;
+        let _running = session.running.lock().await;
+        session.connection.explain(statement).await
+    }
+
+    /// The SQL that creates an object.
+    pub async fn ddl(
+        &self,
+        session: SessionId,
+        schema: &str,
+        name: &str,
+        kind: ObjectKind,
+    ) -> Result<String> {
+        self.session(session)?
+            .connection
+            .ddl(schema, name, kind)
             .await
     }
 }

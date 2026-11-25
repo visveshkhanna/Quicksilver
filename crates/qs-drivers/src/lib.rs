@@ -13,7 +13,7 @@
 use std::time::Duration;
 
 use qs_core::{Column, ConnectionConfig, Engine, Error, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 pub use tokio_util::sync::CancellationToken;
 
 #[cfg(feature = "postgres")]
@@ -91,7 +91,7 @@ pub struct ExecuteOptions {
 }
 
 /// What kind of thing a catalog entry is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, ts_rs::TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub enum ObjectKind {

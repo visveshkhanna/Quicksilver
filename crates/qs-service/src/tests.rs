@@ -237,3 +237,133 @@ async fn sessions_say_which_database_they_are_in() {
     assert!(!info.read_only);
     service.test(&memory()).await.expect("test connects");
 }
+
+/// Runs `script` and returns the id of the last result it produced.
+async fn last_result(service: &Service, session: SessionId, script: &str) -> ResultId {
+    let (events, sink) = recorder();
+    service
+        .run(
+            session,
+            script,
+            ExecuteOptions { row_cap: None },
+            &CancellationToken::new(),
+            sink,
+        )
+        .await
+        .expect("runs");
+    events
+        .lock()
+        .expect("lock")
+        .iter()
+        .rev()
+        .find_map(|e| match e {
+            RunEvent::ResultStarted { result_id, .. } => Some(*result_id),
+            _ => None,
+        })
+        .expect("a result")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_finished_result_sorts_and_copies_what_is_shown() {
+    let service = Service::new();
+    let session = service.connect(&memory()).await.expect("connects").id;
+    let result = last_result(
+        &service,
+        session,
+        "CREATE TABLE p (id INTEGER, name TEXT); \
+         INSERT INTO p VALUES (2, 'b'), (10, 'c'), (1, NULL); \
+         SELECT id, name FROM p",
+    )
+    .await;
+
+    service
+        .sort_result(result, Some((0, SortDirection::Descending)))
+        .expect("sorts");
+    let tsv = service
+        .copy_rows(result, 0, 2, &[1, 0], CopyFormat::Tsv { header: true })
+        .expect("copies");
+    assert_eq!(tsv, "name\tid\nc\t10\nb\t2\n");
+    let sql = service
+        .copy_rows(
+            result,
+            2,
+            5,
+            &[0, 1],
+            CopyFormat::Insert {
+                table: "\"p\"".into(),
+            },
+        )
+        .expect("copies");
+    assert_eq!(
+        sql,
+        "INSERT INTO \"p\" (\"id\", \"name\") VALUES (1, NULL);\n"
+    );
+    assert!(
+        service
+            .copy_rows(result, 0, 1, &[9], CopyFormat::Json)
+            .is_err()
+    );
+
+    service.sort_result(result, None).expect("unsorts");
+    let json = service
+        .copy_rows(result, 0, 1, &[0], CopyFormat::Json)
+        .expect("copies");
+    assert_eq!(json, "[\n  {\"id\": 2}\n]\n");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn explain_and_ddl_go_through_the_session() {
+    let service = Service::new();
+    let session = service.connect(&memory()).await.expect("connects").id;
+    last_result(
+        &service,
+        session,
+        "CREATE TABLE a (id INTEGER PRIMARY KEY); \
+         CREATE TABLE b (id INTEGER, a_id INTEGER REFERENCES a (id)); SELECT 1",
+    )
+    .await;
+    let plan = service
+        .explain(session, "SELECT * FROM b JOIN a ON a.id = b.a_id")
+        .await
+        .expect("explains");
+    assert!(!plan.roots.is_empty());
+    let keys = service.foreign_keys(session, "main").await.expect("keys");
+    assert_eq!(keys.len(), 1);
+    assert_eq!(
+        (keys[0].table.as_str(), keys[0].ref_table.as_str()),
+        ("b", "a")
+    );
+    let ddl = service
+        .ddl(session, "main", "b", ObjectKind::Table)
+        .await
+        .expect("ddl");
+    assert!(ddl.starts_with("CREATE TABLE b"), "{ddl}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_large_result_spills_by_the_services_policy() {
+    let dir = tempfile::tempdir().expect("dir");
+    let service = Service::with_spill(SpillPolicy {
+        threshold: Some(0),
+        dir: Some(dir.path().to_owned()),
+    });
+    let session = service.connect(&memory()).await.expect("connects").id;
+    let result = last_result(
+        &service,
+        session,
+        "WITH RECURSIVE g(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM g WHERE n < 150000) \
+         SELECT n, 'row ' || n FROM g",
+    )
+    .await;
+    let info = service.result_info(result).expect("info");
+    assert_eq!(info.rows, 150_000);
+    assert!(info.spilled_bytes > 0, "{info:?}");
+    let csv = service
+        .copy_rows(result, 149_998, 10, &[1], CopyFormat::Csv { header: false })
+        .expect("copies");
+    assert_eq!(csv, "row 149999\r\nrow 150000\r\n");
+    let tsv = service
+        .copy_rows(result, 10, 1, &[1], CopyFormat::Tsv { header: false })
+        .expect("copies spilled rows");
+    assert_eq!(tsv, "row 11\n");
+}
