@@ -20,7 +20,8 @@ pub const PROFILES_VERSION: u32 = 1;
 
 /// A colour that marks a connection everywhere it appears, so production
 /// looks different from staging. A fixed set, not a theme.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub enum Color {
     /// Red.
@@ -42,7 +43,8 @@ pub enum Color {
 }
 
 /// What a connection may do.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub enum Mode {
     /// Writes are refused by the driver (see
@@ -56,7 +58,8 @@ pub enum Mode {
 }
 
 /// Where a profile's password comes from when it connects.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Auth {
     /// Send no password.
@@ -79,7 +82,8 @@ pub enum Auth {
 }
 
 /// Everything about a profile that a person edits.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct ProfileFields {
     /// The name shown in the navigator.
@@ -184,7 +188,8 @@ impl ProfileFields {
 }
 
 /// A saved connection.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct Profile {
     /// Stable id. The keychain entry, buffers and catalog cache refer to it.

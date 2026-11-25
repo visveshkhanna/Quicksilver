@@ -199,7 +199,8 @@ pub async fn test_connection(
 }
 
 /// What a pasted connection URL says, for filling the connection form.
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct ParsedUrl {
     fields: ProfileFields,

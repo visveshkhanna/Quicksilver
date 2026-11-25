@@ -52,7 +52,8 @@ pub trait ResultSink: Send {
 }
 
 /// Where a statement sits in the script, as byte offsets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct Span {
     /// Offset of the statement's first byte.
     pub start: usize,
@@ -61,7 +62,8 @@ pub struct Span {
 }
 
 /// How one statement went.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct StatementOutcome {
     /// Rows delivered to the sink.
@@ -73,6 +75,7 @@ pub struct StatementOutcome {
     pub capped: bool,
     /// Time from sending the statement to its last row. Sent to the UI as
     /// `elapsedMs`.
+    #[ts(type = "number")]
     #[serde(
         rename = "elapsedMs",
         serialize_with = "qs_core::serde_millis::serialize"
@@ -88,7 +91,8 @@ pub struct ExecuteOptions {
 }
 
 /// What kind of thing a catalog entry is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub enum ObjectKind {
     /// A table, including a partitioned one.
@@ -108,7 +112,8 @@ pub enum ObjectKind {
 }
 
 /// One object in a schema.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct DbObject {
     /// Its name.
     pub name: String,
@@ -117,7 +122,8 @@ pub struct DbObject {
 }
 
 /// One column of a table or view, as the catalog describes it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct ColumnInfo {
     /// Its name.

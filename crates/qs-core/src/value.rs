@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 
 /// The broad kind of a column, enough for the grid to align, format and
 /// choose an editor. The exact server type is kept in [`Column::db_type`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub enum TypeTag {
     /// true / false.
@@ -54,7 +55,8 @@ impl TypeTag {
 
 /// Where a result column's values come from, when the server says so. Phase 6
 /// uses it to decide whether a cell can be edited.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub enum ColumnSource {
     /// A Postgres table column, by table OID and attribute number.
@@ -76,7 +78,8 @@ pub enum ColumnSource {
 }
 
 /// One column of a result.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct Column {
     /// The name the server gave the column. Several columns may share one.

@@ -31,7 +31,8 @@ pub use state::{
 };
 
 /// Something the user should hear about from opening the store.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Notice {
     /// A file could not be read and was moved aside.
@@ -48,7 +49,8 @@ pub enum Notice {
 }
 
 /// A file that could not be read, and where it was kept.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct Recovered {
     /// The file that could not be read.
@@ -60,7 +62,8 @@ pub struct Recovered {
 }
 
 /// What to do with a profile's saved password when the profile is saved.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum PasswordChange {
     /// Leave it as it is.

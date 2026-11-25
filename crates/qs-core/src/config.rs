@@ -12,7 +12,8 @@ use crate::{Engine, Error, Result};
 ///
 /// A mode is honoured exactly or refused by name; it is never quietly
 /// weakened.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "kebab-case")]
 pub enum SslMode {
     /// Plaintext only.

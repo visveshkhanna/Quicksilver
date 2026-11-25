@@ -9,6 +9,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+ts-rs.workspace = true
 qs-core.workspace = true
 qs-drivers.workspace = true
 qs-net.workspace = true

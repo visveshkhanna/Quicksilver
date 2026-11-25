@@ -6,7 +6,15 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!**/dist", "!**/target", "!**/gen", "!apps/docs", "!**/*.md"]
+    "includes": [
+      "**",
+      "!**/dist",
+      "!**/target",
+      "!**/gen",
+      "!apps/desktop/src/ipc/generated",
+      "!apps/docs",
+      "!**/*.md"
+    ]
   },
   "formatter": {
     "enabled": true,

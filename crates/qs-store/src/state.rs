@@ -72,7 +72,8 @@ CREATE TABLE catalog (
 ";
 
 /// One script that was run.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryEntry {
     /// Its id; larger is newer.
@@ -114,25 +115,31 @@ pub struct NewHistoryEntry {
 }
 
 /// Which history to list, newest first.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryQuery {
     /// Only runs against this profile.
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub profile_id: Option<String>,
     /// Only scripts containing this text (case-insensitive for ASCII).
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub text: Option<String>,
     /// Only entries older than this id, for paging.
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub before_id: Option<i64>,
     /// At most this many (default 100, at most 1000).
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub limit: Option<u32>,
 }
 
 /// A query saved by name.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct SavedQuery {
     /// Stable id.
@@ -150,7 +157,8 @@ pub struct SavedQuery {
 }
 
 /// An editor tab's contents, kept so tabs reopen as they were left.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct Buffer {
     /// The tab's id, chosen by the UI.
@@ -173,7 +181,8 @@ pub struct Buffer {
 }
 
 /// One name in the catalog cache.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogEntry {
     /// The profile it was read from.

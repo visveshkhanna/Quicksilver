@@ -1,104 +1,33 @@
-// What Quicksilver keeps between runs, mirrored from `qs-store` and wrapped
-// as calls to the commands in `src-tauri/src/saved.rs`.
+// What Quicksilver keeps between runs: the commands in
+// `src-tauri/src/saved.rs`, with types generated from `qs-store`.
 
 import { invoke } from '@tauri-apps/api/core'
-import type { Engine, SessionInfo } from './types'
+import type { Buffer } from './generated/Buffer'
+import type { CatalogEntry } from './generated/CatalogEntry'
+import type { HistoryEntry } from './generated/HistoryEntry'
+import type { HistoryQuery } from './generated/HistoryQuery'
+import type { Notice } from './generated/Notice'
+import type { ParsedUrl } from './generated/ParsedUrl'
+import type { PasswordChange } from './generated/PasswordChange'
+import type { Profile } from './generated/Profile'
+import type { ProfileFields } from './generated/ProfileFields'
+import type { SavedQuery } from './generated/SavedQuery'
+import type { SessionInfo } from './types'
 
-/** `qs_core::SslMode`. */
-export type SslMode = 'disable' | 'allow' | 'prefer' | 'require' | 'verify-ca' | 'verify-full'
-
-/** `qs_store::Color`: a connection's marker colour. */
-export type Color = 'red' | 'orange' | 'yellow' | 'green' | 'teal' | 'blue' | 'purple' | 'gray'
-
-/** `qs_store::Auth`: where a connection's password comes from. */
-export type Auth =
-  | { kind: 'none' }
-  | { kind: 'keychain' }
-  | { kind: 'command'; program: string; args: string[] }
-
-/** `qs_store::Mode`: what a connection may do. */
-export type Mode = 'readOnly' | 'readWrite' | 'full'
-
-/** `qs_store::ProfileFields`: what a person edits about a connection. */
-export type ProfileFields = {
-  name: string
-  project: string | null
-  color: Color | null
-  engine: Engine
-  host: string | null
-  port: number | null
-  user: string | null
-  database: string | null
-  path: string | null
-  sslMode: SslMode
-  sslRootCert: string | null
-  options: Record<string, string>
-  auth: Auth
-  mode: Mode
-}
-
-/** `qs_store::Profile`: a saved connection. */
-export type Profile = ProfileFields & { id: string; createdMs: number; updatedMs: number }
-
-/** `qs_store::PasswordChange`. */
-export type PasswordChange = { kind: 'keep' } | { kind: 'set'; password: string } | { kind: 'clear' }
-
-/** `qs_store::Notice`: something to tell the user once, after start-up. */
-export type Notice =
-  | { kind: 'recovered'; file: string; keptAs: string; reason: string }
-  | { kind: 'newerFormat'; file: string; version: number }
-
-/** `qs_store::HistoryEntry`. */
-export type HistoryEntry = {
-  id: number
-  profileId: string | null
-  database: string | null
-  sql: string
-  startedMs: number
-  elapsedMs: number | null
-  rows: number | null
-  error: string | null
-}
-
-/** `qs_store::HistoryQuery`. Every field is optional. */
-export type HistoryQuery = {
-  profileId?: string | null
-  text?: string | null
-  beforeId?: number | null
-  limit?: number | null
-}
-
-/** `qs_store::SavedQuery`. */
-export type SavedQuery = {
-  id: string
-  name: string
-  profileId: string | null
-  sql: string
-  createdMs: number
-  updatedMs: number
-}
-
-/** `qs_store::Buffer`: an editor tab's contents. */
-export type Buffer = {
-  id: string
-  profileId: string | null
-  database: string | null
-  title: string
-  sql: string
-  cursor: number
-  position: number
-  updatedMs: number
-}
-
-/** `qs_store::CatalogEntry`: one name the `Mod+K` switcher can find. */
-export type CatalogEntry = {
-  profileId: string
-  database: string
-  schema: string | null
-  name: string | null
-  kind: string
-  refreshedMs: number
-}
+export type { Auth } from './generated/Auth'
+export type { Buffer } from './generated/Buffer'
+export type { CatalogEntry } from './generated/CatalogEntry'
+export type { Color } from './generated/Color'
+export type { HistoryEntry } from './generated/HistoryEntry'
+export type { HistoryQuery } from './generated/HistoryQuery'
+export type { Mode } from './generated/Mode'
+export type { Notice } from './generated/Notice'
+export type { ParsedUrl } from './generated/ParsedUrl'
+export type { PasswordChange } from './generated/PasswordChange'
+export type { Profile } from './generated/Profile'
+export type { ProfileFields } from './generated/ProfileFields'
+export type { SavedQuery } from './generated/SavedQuery'
+export type { SslMode } from './generated/SslMode'
 
 export const storeNotices = (): Promise<Notice[]> => invoke('store_notices')
 
@@ -134,9 +63,6 @@ export const testConnection = (
   id: string | null,
   password: string | null,
 ): Promise<void> => invoke('test_connection', { fields, id, password })
-
-/** A pasted URL, read into form fields. */
-export type ParsedUrl = { fields: ProfileFields; password: string | null }
 
 export const parseUrl = (url: string): Promise<ParsedUrl> => invoke('parse_url', { url })
 

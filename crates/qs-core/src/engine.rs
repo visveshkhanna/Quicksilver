@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 /// Callers ask an `Engine` questions through its methods instead of matching
 /// on it, so adding an engine means adding arms here, not special cases in
 /// every view.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "lowercase")]
 pub enum Engine {
     /// PostgreSQL and wire-compatible servers.

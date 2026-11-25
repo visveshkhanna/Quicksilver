@@ -39,7 +39,8 @@ pub type RunId = u64;
 pub type ResultId = u64;
 
 /// What the app reports about itself.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct AppInfo {
     /// The product name.
@@ -51,7 +52,8 @@ pub struct AppInfo {
 }
 
 /// One engine, as the UI lists it.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct EngineInfo {
     /// The stable identifier, as it is stored in profiles.
@@ -79,7 +81,8 @@ pub fn app_info() -> AppInfo {
 }
 
 /// An open session, as the UI sees it.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionInfo {
     /// Its id.
@@ -95,7 +98,8 @@ pub struct SessionInfo {
 }
 
 /// What happens during a run, in order.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq, ts_rs::TS)]
+#[ts(export)]
 #[serde(
     tag = "event",
     rename_all = "camelCase",
@@ -137,6 +141,7 @@ pub enum RunEvent {
     /// Every statement ran.
     Finished {
         /// Time for the whole script. Sent to the UI as `elapsedMs`.
+        #[ts(type = "number")]
         #[serde(
             rename = "elapsedMs",
             serialize_with = "qs_core::serde_millis::serialize"
@@ -153,7 +158,8 @@ pub enum RunEvent {
 }
 
 /// What a result holds right now.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct ResultInfo {
     /// Its columns.
@@ -175,7 +181,8 @@ fn effective_database(config: &ConnectionConfig) -> Option<String> {
 
 /// A statement's place in the editor, in UTF-16 code units (JavaScript
 /// string offsets).
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct StatementRange {
     /// Where it starts.

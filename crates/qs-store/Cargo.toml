@@ -9,6 +9,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+ts-rs.workspace = true
 qs-core.workspace = true
 keyring = "4.2"
 rusqlite = { workspace = true, features = ["cache"] }

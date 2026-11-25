@@ -74,6 +74,13 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+      # `cargo test` regenerates the UI's TypeScript types; they must match
+      # what is committed.
+      - name: Check generated TypeScript types
+        shell: bash
+        run: |
+          git add -N apps/desktop/src/ipc/generated
+          git diff --exit-code -- apps/desktop/src/ipc/generated
       # Builds the frontend and the release binary, without installers, so a
       # change that only breaks the packaged app still fails here.
       - name: Build the app

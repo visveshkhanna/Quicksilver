@@ -1,0 +1,7 @@
+# `cargo test` writes the UI's TypeScript types (ts-rs) here. CI fails when
+# the committed files differ from what the Rust types generate.
+[env]
+TS_RS_EXPORT_DIR = { value = "apps/desktop/src/ipc/generated", relative = true }
+# IDs and timestamps fit in a JavaScript number; the UI never does bigint
+# arithmetic on them.
+TS_RS_LARGE_INT = "number"

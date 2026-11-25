@@ -9,6 +9,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+ts-rs.workspace = true
 percent-encoding = "2.3"
 serde.workspace = true
 thiserror.workspace = true

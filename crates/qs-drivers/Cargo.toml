@@ -14,6 +14,7 @@ postgres = ["dep:tokio-postgres", "dep:tokio-postgres-rustls", "dep:futures-util
 sqlite = ["dep:rusqlite"]
 
 [dependencies]
+ts-rs.workspace = true
 qs-core.workspace = true
 qs-net.workspace = true
 qs-sql.workspace = true

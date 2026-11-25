@@ -10,7 +10,8 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 /// Messages are the server's or the library's own words. Quicksilver adds
 /// context but never replaces them, because the original text is what people
 /// search for.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, thiserror::Error, ts_rs::TS)]
+#[ts(export, rename = "QsError")]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Error {
     /// The connection settings are incomplete or contradict each other.
