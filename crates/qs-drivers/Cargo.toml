@@ -8,9 +8,30 @@ rust-version.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+default = ["postgres", "sqlite"]
+postgres = ["dep:tokio-postgres", "dep:tokio-postgres-rustls", "dep:futures-util"]
+sqlite = ["dep:rusqlite"]
+
 [dependencies]
 qs-core.workspace = true
 qs-net.workspace = true
+qs-sql.workspace = true
+tokio = { workspace = true }
+tokio-util = "0.7"
+tracing.workspace = true
+serde.workspace = true
+
+futures-util = { version = "0.3", optional = true, default-features = false, features = ["std"] }
+tokio-postgres = { version = "0.7.18", optional = true }
+tokio-postgres-rustls = { version = "0.14", optional = true, default-features = false, features = ["ring"] }
+# `bundled` compiles SQLite into the binary so every OS gets the same version.
+# `column_metadata` names the table and column a result column comes from,
+# which phase 6 needs to decide whether a cell can be edited.
+rusqlite = { version = "0.43", optional = true, default-features = false, features = ["bundled", "column_decltype", "column_metadata"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [lints]
 workspace = true
