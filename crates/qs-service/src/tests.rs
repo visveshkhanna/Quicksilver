@@ -215,3 +215,25 @@ fn events_serialize_with_camel_case_tags() {
         serde_json::json!({ "event": "progress", "resultId": 3, "rows": 10 })
     );
 }
+
+#[test]
+fn the_statement_at_the_cursor_is_found_in_utf16_offsets() {
+    // "é" and the emoji are 1 and 2 UTF-16 units but 2 and 4 bytes.
+    let script = "select 'é😀';\nselect 2;";
+    let second = script.encode_utf16().count() - 3;
+    let first = statement_at(script, Engine::Postgres, 2).expect("first");
+    assert_eq!((first.start, first.end), (0, 12));
+    let next = statement_at(script, Engine::Postgres, second).expect("second");
+    let text: String =
+        String::from_utf16_lossy(&script.encode_utf16().collect::<Vec<_>>()[next.start..next.end]);
+    assert_eq!(text, "select 2");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sessions_say_which_database_they_are_in() {
+    let service = Service::new();
+    let info = service.connect(&memory()).await.expect("connects");
+    assert_eq!(info.database.as_deref(), Some("main"));
+    assert!(!info.read_only);
+    service.test(&memory()).await.expect("test connects");
+}

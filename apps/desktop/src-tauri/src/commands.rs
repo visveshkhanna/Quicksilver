@@ -137,3 +137,14 @@ pub async fn list_columns(
 ) -> Result<Vec<ColumnInfo>> {
     service.columns(session, &schema, &table).await
 }
+
+/// Where the statement under the editor cursor starts and ends, in UTF-16
+/// offsets.
+#[tauri::command]
+pub async fn statement_at(
+    script: String,
+    engine: qs_core::Engine,
+    cursor: usize,
+) -> Result<Option<qs_service::StatementRange>> {
+    Ok(qs_service::statement_at(&script, engine, cursor))
+}

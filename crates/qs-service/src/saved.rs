@@ -6,19 +6,37 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use qs_core::{ConnectionConfig, Error, Result};
-use qs_store::{Auth, CatalogObject, NewHistoryEntry, Store, now_ms};
+use qs_store::{Auth, CatalogObject, NewHistoryEntry, ProfileFields, Store, now_ms};
 
 use crate::{RunEvent, Service, SessionId};
 
-/// The settings to connect with profile `id`. A `password` given here wins
-/// (the user just typed it); otherwise the profile's [`Auth`] decides.
+/// The settings to connect with profile `id`, in `database` when given
+/// (otherwise the profile's own). A `password` given here wins (the user
+/// just typed it); otherwise the profile's [`Auth`] decides.
 pub async fn connection_config(
     store: &Store,
     id: &str,
+    database: Option<String>,
     password: Option<String>,
 ) -> Result<ConnectionConfig> {
     let profile = store.profile(id)?;
-    let password = match (password, &profile.fields.auth) {
+    let mut config = config_for(&profile.fields, &profile.id, store, password).await?;
+    if database.is_some() {
+        config.database = database;
+    }
+    Ok(config)
+}
+
+/// The settings for unsaved `fields` (the connection form's Test button).
+/// With no `password`, a saved profile `id`'s password is used if it has
+/// one.
+pub async fn config_for(
+    fields: &ProfileFields,
+    id: &str,
+    store: &Store,
+    password: Option<String>,
+) -> Result<ConnectionConfig> {
+    let password = match (password, &fields.auth) {
         (Some(password), _) => Some(password),
         (None, Auth::NoPassword) => None,
         (None, Auth::Keychain) => {
@@ -26,7 +44,7 @@ pub async fn connection_config(
                 store
                     .saved_password(id)?
                     .ok_or_else(|| Error::PasswordNeeded {
-                        message: format!("no password is saved for \"{}\"", profile.fields.name),
+                        message: format!("no password is saved for \"{}\"", fields.name),
                     })?,
             )
         }
@@ -35,7 +53,7 @@ pub async fn connection_config(
                 .await?,
         ),
     };
-    Ok(profile.fields.to_config(password))
+    Ok(fields.to_config(password))
 }
 
 /// Watches one run's events and adds it to history when it ends.
@@ -158,7 +176,7 @@ fn kind_name(kind: &crate::ObjectKind) -> String {
 mod tests {
     use qs_core::Engine;
     use qs_drivers::{CancellationToken, ExecuteOptions};
-    use qs_store::{DataDir, HistoryQuery, MemorySecrets, PasswordChange, ProfileFields};
+    use qs_store::{DataDir, HistoryQuery, MemorySecrets, PasswordChange};
 
     use super::*;
 
@@ -186,13 +204,13 @@ mod tests {
         let (dir, store) = store();
         let id = sqlite_profile(&store, &dir, Auth::Keychain);
 
-        let missing = connection_config(&store, &id, None).await;
+        let missing = connection_config(&store, &id, None, None).await;
         assert!(
             matches!(missing, Err(Error::PasswordNeeded { .. })),
             "{missing:?}"
         );
 
-        let typed = connection_config(&store, &id, Some("typed".into())).await;
+        let typed = connection_config(&store, &id, None, Some("typed".into())).await;
         assert_eq!(typed.expect("config").password.as_deref(), Some("typed"));
 
         let mut fields = store.profile(&id).expect("profile").fields;
@@ -205,14 +223,18 @@ mod tests {
                 },
             )
             .expect("saves");
-        let saved = connection_config(&store, &id, None).await.expect("config");
+        let saved = connection_config(&store, &id, None, None)
+            .await
+            .expect("config");
         assert_eq!(saved.password.as_deref(), Some(""));
 
         fields.auth = Auth::NoPassword;
         store
             .update_profile(&id, fields.clone(), PasswordChange::Keep)
             .expect("saves");
-        let none = connection_config(&store, &id, None).await.expect("config");
+        let none = connection_config(&store, &id, None, None)
+            .await
+            .expect("config");
         assert_eq!(none.password, None);
 
         if cfg!(unix) {
@@ -223,7 +245,9 @@ mod tests {
             store
                 .update_profile(&id, fields, PasswordChange::Keep)
                 .expect("saves");
-            let token = connection_config(&store, &id, None).await.expect("config");
+            let token = connection_config(&store, &id, None, None)
+                .await
+                .expect("config");
             assert_eq!(token.password.as_deref(), Some("token-42"));
         }
     }
@@ -233,7 +257,9 @@ mod tests {
         let (dir, store) = store();
         let id = sqlite_profile(&store, &dir, Auth::NoPassword);
         let service = Service::new();
-        let config = connection_config(&store, &id, None).await.expect("config");
+        let config = connection_config(&store, &id, None, None)
+            .await
+            .expect("config");
         let session = service.connect(&config).await.expect("connects");
 
         for script in [
@@ -282,7 +308,9 @@ mod tests {
         let (dir, store) = store();
         let id = sqlite_profile(&store, &dir, Auth::NoPassword);
         let service = Service::new();
-        let config = connection_config(&store, &id, None).await.expect("config");
+        let config = connection_config(&store, &id, None, None)
+            .await
+            .expect("config");
         let session = service.connect(&config).await.expect("connects");
         service
             .run(

@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use qs_core::{Engine, Error};
+use qs_core::{ConnectionConfig, Error};
 use qs_service::{Service, SessionId, SessionInfo, saved};
 use qs_store::{
     Buffer, CatalogEntry, HistoryEntry, HistoryQuery, Notice, PasswordChange, Profile,
@@ -54,26 +54,25 @@ pub async fn delete_profile(store: State<'_, Arc<Store>>, id: String) -> Result<
     store.delete_profile(&id)
 }
 
-/// Opens a session for a saved connection. `password`, when given, is used
-/// instead of the saved one (and is not saved). The catalog cache for the
-/// `Mod+K` switcher is refreshed in the background afterwards.
+/// Opens a session for a saved connection, in `database` when given.
+/// `password`, when given, is used instead of the saved one (and is not
+/// saved). The catalog cache for the `Mod+K` switcher is refreshed in the
+/// background afterwards.
 #[tauri::command]
 pub async fn connect_profile(
     service: State<'_, Service>,
     store: State<'_, Arc<Store>>,
     id: String,
+    database: Option<String>,
     password: Option<String>,
 ) -> Result<SessionInfo> {
-    let config = saved::connection_config(&store, &id, password).await?;
+    let config = saved::connection_config(&store, &id, database, password).await?;
     let info = service.connect(&config).await?;
-    let database = config
-        .database
-        .clone()
-        .or_else(|| (config.engine == Engine::Sqlite).then(|| "main".to_owned()));
-    let (service, store) = (service.inner().clone(), Arc::clone(&store));
+    let database = info.database.clone();
+    let (service, store, session) = (service.inner().clone(), Arc::clone(&store), info.id);
     tauri::async_runtime::spawn(async move {
         if let Err(err) =
-            saved::refresh_catalog(&service, &store, info.id, &id, database.as_deref()).await
+            saved::refresh_catalog(&service, &store, session, &id, database.as_deref()).await
         {
             tracing::warn!("the catalog cache could not be refreshed: {err}");
         }
@@ -182,4 +181,50 @@ pub async fn set_layout(
     value: serde_json::Value,
 ) -> Result<()> {
     store.state().set_layout(&key, &value)
+}
+
+/// Connects with unsaved connection-form fields and disconnects, to check
+/// them. `id` is the profile being edited, if any, so its saved password can
+/// be used when none is typed.
+#[tauri::command]
+pub async fn test_connection(
+    service: State<'_, Service>,
+    store: State<'_, Arc<Store>>,
+    fields: ProfileFields,
+    id: Option<String>,
+    password: Option<String>,
+) -> Result<()> {
+    let config = saved::config_for(&fields, id.as_deref().unwrap_or(""), &store, password).await?;
+    service.test(&config).await
+}
+
+/// What a pasted connection URL says, for filling the connection form.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParsedUrl {
+    fields: ProfileFields,
+    /// The password in the URL, if it had one (blank counts).
+    password: Option<String>,
+}
+
+/// Reads a connection URL into connection-form fields.
+#[tauri::command]
+pub async fn parse_url(url: String) -> Result<ParsedUrl> {
+    let config = ConnectionConfig::from_url(url.trim())?;
+    let name = config
+        .database
+        .clone()
+        .or_else(|| config.host.clone())
+        .or_else(|| {
+            config
+                .path
+                .as_ref()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| config.engine.display_name().to_owned());
+    Ok(ParsedUrl {
+        fields: ProfileFields::from_config(name, &config),
+        password: config.password,
+    })
 }

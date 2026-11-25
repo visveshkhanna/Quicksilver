@@ -3109,6 +3109,7 @@ dependencies = [
  "qs-core",
  "qs-drivers",
  "qs-net",
+ "qs-sql",
  "qs-store",
  "serde",
  "serde_json",

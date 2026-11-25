@@ -36,6 +36,7 @@ pub fn run() {
             commands::list_schemas,
             commands::list_objects,
             commands::list_columns,
+            commands::statement_at,
             saved::store_notices,
             saved::list_profiles,
             saved::create_profile,
@@ -54,6 +55,8 @@ pub fn run() {
             saved::delete_buffer,
             saved::get_layout,
             saved::set_layout,
+            saved::test_connection,
+            saved::parse_url,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|err| {

@@ -86,6 +86,12 @@ pub struct SessionInfo {
     pub id: SessionId,
     /// The engine it speaks.
     pub engine: Engine,
+    /// The database it is connected to, when that is known without asking
+    /// the server: the configured one, Postgres's default (the user name),
+    /// or `main` for SQLite.
+    pub database: Option<String>,
+    /// Whether writes are refused.
+    pub read_only: bool,
 }
 
 /// What happens during a run, in order.
@@ -158,6 +164,52 @@ pub struct ResultInfo {
     pub bytes: u64,
 }
 
+/// The database a connection made with `config` lands in.
+fn effective_database(config: &ConnectionConfig) -> Option<String> {
+    config.database.clone().or_else(|| match config.engine {
+        Engine::Postgres => config.user.clone(),
+        Engine::Sqlite => Some("main".to_owned()),
+        _ => None,
+    })
+}
+
+/// A statement's place in the editor, in UTF-16 code units (JavaScript
+/// string offsets).
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StatementRange {
+    /// Where it starts.
+    pub start: usize,
+    /// Just past where it ends.
+    pub end: usize,
+}
+
+/// The statement the editor cursor is in (see [`qs_sql::statement_at`]).
+/// `cursor` and the result are UTF-16 offsets, as the editor counts.
+pub fn statement_at(script: &str, engine: Engine, cursor: usize) -> Option<StatementRange> {
+    let byte = utf16_to_byte(script, cursor);
+    let statement = qs_sql::statement_at(script, qs_sql::Dialect::for_engine(engine), byte)?;
+    Some(StatementRange {
+        start: byte_to_utf16(script, statement.start),
+        end: byte_to_utf16(script, statement.end),
+    })
+}
+
+fn utf16_to_byte(text: &str, offset: usize) -> usize {
+    let mut units = 0;
+    for (byte, c) in text.char_indices() {
+        if units >= offset {
+            return byte;
+        }
+        units += c.len_utf16();
+    }
+    text.len()
+}
+
+fn byte_to_utf16(text: &str, byte: usize) -> usize {
+    text[..byte.min(text.len())].encode_utf16().count()
+}
+
 struct Session {
     connection: Connection,
     /// One script at a time per session: statements on one connection run in
@@ -217,7 +269,17 @@ impl Service {
                 running: tokio::sync::Mutex::new(()),
             }),
         );
-        Ok(SessionInfo { id, engine })
+        Ok(SessionInfo {
+            id,
+            engine,
+            database: effective_database(config),
+            read_only: config.read_only,
+        })
+    }
+
+    /// Connects and disconnects at once, to check that `config` works.
+    pub async fn test(&self, config: &ConnectionConfig) -> Result<()> {
+        Connection::connect(config).await.map(drop)
     }
 
     /// Closes a session. Results it produced stay readable until closed.
