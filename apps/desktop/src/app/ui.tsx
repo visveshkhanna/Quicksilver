@@ -54,6 +54,8 @@ export function Button({
   disabled,
   type = 'button',
   title,
+  className = '',
+  small,
 }: {
   children: ReactNode
   onClick?: () => void
@@ -61,6 +63,9 @@ export function Button({
   disabled?: boolean
   type?: 'button' | 'submit'
   title?: string
+  className?: string
+  /** A compact button for toolbars. */
+  small?: boolean
 }) {
   const look = {
     plain: 'border border-border bg-raised hover:bg-border/60',
@@ -73,7 +78,7 @@ export function Button({
       onClick={onClick}
       disabled={disabled}
       title={title}
-      className={`rounded px-3 py-1 disabled:opacity-50 ${look}`}
+      className={`rounded disabled:opacity-50 ${small ? 'px-2 py-0.5 text-[12px]' : 'px-3 py-1'} ${look} ${className}`}
     >
       {children}
     </button>

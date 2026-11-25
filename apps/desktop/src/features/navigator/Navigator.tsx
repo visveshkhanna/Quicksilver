@@ -1,13 +1,18 @@
 import * as Menu from '@radix-ui/react-context-menu'
 import type { ReactNode } from 'react'
 import { Kbd } from '../../app/Kbd'
+import { MenuItem as Item, MenuContent, MenuSeparator as Separator } from '../../app/menu'
 import { Button, ColorDot } from '../../app/ui'
+import * as ipc from '../../ipc/commands'
 import type { Profile } from '../../ipc/store'
 import type { ColumnInfo, DbObject } from '../../ipc/types'
+import { copyText } from '../../lib/clipboard'
 import { selectFrom } from '../../lib/target'
 import {
   deleteProfile,
   disconnectProfile,
+  ensureSession,
+  errorText,
   type Loaded,
   type NodeRef,
   newTab,
@@ -16,6 +21,7 @@ import {
   openDialog,
   refreshNode,
   retarget,
+  say,
   select,
   setFilter,
   toggleNode,
@@ -32,7 +38,20 @@ const GROUPS: { group: ObjectGroup; title: string; kinds: DbObject['kind'][] }[]
 const OPENABLE = new Set<DbObject['kind']>(['table', 'view', 'materializedView', 'foreignTable'])
 
 function copy(text: string) {
-  void navigator.clipboard?.writeText(text)
+  copyText(text).catch((err) => say(`Could not copy: ${errorText(err)}`, true))
+}
+
+/** Copies the SQL that creates an object, as the server describes it. */
+async function copyDdl(profileId: string, database: string, schema: string, object: DbObject) {
+  const ddl = ensureSession(profileId, database).then((session) =>
+    ipc.objectDdl(session.id, schema, object.name, object.kind),
+  )
+  try {
+    await copyText(ddl)
+    say(`Copied the DDL for ${object.name}`)
+  } catch (err) {
+    say(`Could not copy the DDL: ${errorText(err)}`, true)
+  }
 }
 
 /**
@@ -205,37 +224,10 @@ function Row({
   return (
     <Menu.Root>
       <Menu.Trigger asChild>{row}</Menu.Trigger>
-      <Menu.Portal>
-        <Menu.Content className="min-w-48 rounded-md border border-border bg-bg p-1 shadow-xl">
-          {menu}
-        </Menu.Content>
-      </Menu.Portal>
+      <MenuContent>{menu}</MenuContent>
     </Menu.Root>
   )
 }
-
-function Item({
-  children,
-  onSelect,
-  danger,
-}: {
-  children: ReactNode
-  onSelect: () => void
-  danger?: boolean
-}) {
-  return (
-    <Menu.Item
-      onSelect={onSelect}
-      className={`cursor-default rounded px-2 py-1 outline-none data-highlighted:bg-accent/15 ${
-        danger ? 'text-[#e5484d]' : ''
-      }`}
-    >
-      {children}
-    </Menu.Item>
-  )
-}
-
-const Separator = () => <Menu.Separator className="my-1 h-px bg-border" />
 
 function Children({
   node,
@@ -458,7 +450,10 @@ function ObjectNode({
   const node: NodeRef = { kind: 'object', profileId: profile.id, database, schema, object }
   const openable = OPENABLE.has(object.kind)
   const open = () =>
-    newTab({ profileId: profile.id, database }, selectFrom(profile.engine, schema, object.name))
+    newTab({ profileId: profile.id, database }, selectFrom(profile.engine, schema, object.name), {
+      schema,
+      name: object.name,
+    })
   return (
     <>
       <Row
@@ -475,6 +470,7 @@ function ObjectNode({
             <Separator />
             <Item onSelect={() => copy(object.name)}>Copy name</Item>
             <Item onSelect={() => copy(`${schema}.${object.name}`)}>Copy qualified name</Item>
+            <Item onSelect={() => void copyDdl(profile.id, database, schema, object)}>Copy DDL</Item>
             {openable && <Item onSelect={() => refreshNode(node)}>Refresh</Item>}
           </>
         }

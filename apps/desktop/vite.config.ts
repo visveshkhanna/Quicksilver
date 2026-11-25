@@ -17,6 +17,9 @@ export default defineConfig({
   build: {
     target: 'es2022',
     sourcemap: true,
+    // The bundle loads from disk inside the app, not over a network, so one
+    // large chunk (mostly CodeMirror and React) costs little.
+    chunkSizeWarningLimit: 1500,
   },
   test: {
     environment: 'node',

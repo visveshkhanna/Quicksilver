@@ -2,31 +2,72 @@
 // `useApp(selector)` and call the exported functions; nothing else writes.
 
 import { create } from 'zustand'
+import { forgetEditor, selectionIn } from '../features/editor/registry'
 import * as ipc from '../ipc/commands'
 import type { CatalogEntry, Notice, Profile, ProfileFields } from '../ipc/store'
 import * as saved from '../ipc/store'
-import type { Column, ColumnInfo, DbObject, QsError, SessionInfo, StatementOutcome } from '../ipc/types'
+import type {
+  Column,
+  ColumnInfo,
+  DbObject,
+  Plan,
+  QsError,
+  SessionInfo,
+  SortDirection,
+  StatementOutcome,
+} from '../ipc/types'
 import type { Overrides } from '../keymap/keymap'
-import { type Target, targetKey } from '../lib/target'
+import { quoteIdent, type Target, targetKey } from '../lib/target'
 
-/** How many rows a run keeps per statement; the UI says when it stopped there. */
-export const ROW_CAP = 1000
-/** How many rows the results pane shows. */
-export const PREVIEW_ROWS = 200
+/**
+ * How many rows a run keeps per statement. Rows past it are not read; the
+ * results say so and offer to run again without the limit.
+ */
+export const ROW_CAP = 100_000
+
+/** One statement's rows, as the grid pages through them. */
+export type ResultView = {
+  /** The statement's position in the script. */
+  index: number
+  resultId: number
+  columns: Column[]
+  /** Rows stored so far. */
+  rows: number
+  /** Whether the statement finished, so the rows can be sorted. */
+  done: boolean
+  sort: { column: number; direction: SortDirection } | null
+  /** Bumped whenever the rows' order changes, so the grid refetches. */
+  version: number
+}
 
 export type RunState = {
   status: 'running' | 'done' | 'failed'
   runId: number | null
-  /** Where the script that ran starts in the editor, for error positions. */
+  /** The text that ran, and where it starts in the editor. */
+  script: string
   offset: number
+  /** The row cap it ran with; `null` for none. */
+  rowCap: number | null
+  /** Each statement's start in the editor (UTF-16), by index. */
+  starts: number[]
   statements: { index: number; resultId: number | null; outcome: StatementOutcome | null }[]
-  resultId: number | null
-  columns: Column[]
-  rows: (string | null)[][]
+  results: ResultView[]
+  /** Which result is shown. */
+  shown: number
   elapsedMs: number | null
   error: QsError | null
   errorIndex: number | null
+  /** Where in the editor the error points, when the server said. */
+  errorAt: number | null
 }
+
+export type PlanState =
+  | { status: 'loading'; sql: string }
+  | { status: 'ready'; sql: string; plan: Plan }
+  | { status: 'failed'; sql: string; error: string }
+
+/** A table a tab was opened on, for the filter bar. */
+export type TableSource = { schema: string | null; name: string }
 
 export type Tab = {
   id: string
@@ -36,6 +77,12 @@ export type Tab = {
   sql: string
   cursor: number
   run: RunState | null
+  plan: PlanState | null
+  /** What the results area shows. */
+  view: 'results' | 'plan'
+  /** Set when the tab was opened on a table; enables the filter bar. */
+  table: TableSource | null
+  filter: string
 }
 
 export type Dialog =
@@ -73,7 +120,7 @@ export type Loaded =
     }
 
 export type Selection =
-  | { kind: 'row'; columns: Column[]; row: (string | null)[] }
+  | { kind: 'row'; columns: Column[]; row: (string | null)[]; position?: number }
   | { kind: 'node'; node: NodeRef }
 
 export type State = {
@@ -146,13 +193,13 @@ export async function boot() {
     saved.storeNotices(),
   ])
   const tabs: Tab[] = buffers.map((b) => ({
+    ...blankTab,
     id: b.id,
     title: b.title,
     profileId: profiles.some((p) => p.id === b.profileId) ? b.profileId : null,
     database: b.database,
     sql: b.sql,
     cursor: b.cursor,
-    run: null,
   }))
   set({
     ready: true,
@@ -315,6 +362,18 @@ export async function reloadCatalog() {
 
 // --- Tabs ---------------------------------------------------------------------
 
+const blankTab: Omit<Tab, 'id' | 'title'> = {
+  profileId: null,
+  database: null,
+  sql: '',
+  cursor: 0,
+  run: null,
+  plan: null,
+  view: 'results',
+  table: null,
+  filter: '',
+}
+
 export function activeTab(state: State = get()): Tab | undefined {
   return state.tabs.find((t) => t.id === state.activeTabId)
 }
@@ -359,19 +418,23 @@ function nextTitle(): string {
   return `Query ${n}`
 }
 
-/** Opens a tab on `target` (or the front tab's target) and makes it active. */
-export function newTab(target?: Target | null, sql = ''): Tab {
+/**
+ * Opens a tab on `target` (or the front tab's target) and makes it active.
+ * A tab opened on `table` gets the filter bar.
+ */
+export function newTab(target?: Target | null, sql = '', table: TableSource | null = null): Tab {
   const front = activeTab()
   const where =
     target === undefined ? (front ? { profileId: front.profileId, database: front.database } : null) : target
   const tab: Tab = {
+    ...blankTab,
     id: crypto.randomUUID(),
-    title: nextTitle(),
+    title: table ? table.name : nextTitle(),
     profileId: where?.profileId ?? null,
     database: where?.database ?? null,
     sql,
     cursor: sql.length,
-    run: null,
+    table,
   }
   set((s) => ({ tabs: [...s.tabs, tab], activeTabId: tab.id }))
   persistTab(tab, true)
@@ -395,13 +458,14 @@ export function closeTab(id = get().activeTabId) {
   if (!tab) return
   if (tab.run?.status === 'running' && tab.run.runId !== null) void ipc.cancelRun(tab.run.runId)
   freeResults(tab)
+  forgetEditor(tab.id)
   clearTimeout(saveTimers.get(tab.id))
   const rest = tabs.filter((t) => t.id !== id)
   const next = rest[Math.min(index, rest.length - 1)]
   set((s) => ({
     tabs: rest,
     activeTabId: s.activeTabId === id ? (next?.id ?? null) : s.activeTabId,
-    closedTabs: [{ ...tab, run: null }, ...s.closedTabs].slice(0, 20),
+    closedTabs: [{ ...tab, run: null, plan: null, view: 'results' as const }, ...s.closedTabs].slice(0, 20),
   }))
   void saved.deleteBuffer(tab.id).catch(() => {})
 }
@@ -451,84 +515,147 @@ function touchTarget(target: Target) {
 // --- Runs ---------------------------------------------------------------------
 
 function freeResults(tab: Tab) {
-  for (const s of tab.run?.statements ?? []) {
-    if (s.resultId !== null) void ipc.closeResult(s.resultId).catch(() => {})
-  }
+  for (const r of tab.run?.results ?? []) void ipc.closeResult(r.resultId).catch(() => {})
 }
 
 function updateRun(tabId: string, change: (run: RunState) => Partial<RunState>) {
   updateTab(tabId, (t) => (t.run ? { run: { ...t.run, ...change(t.run) } } : {}))
 }
 
-/** Runs the statement under the cursor, or the whole editor, in the front tab. */
+function updateResult(tabId: string, resultId: number, change: (r: ResultView) => Partial<ResultView>) {
+  updateRun(tabId, (run) => ({
+    results: run.results.map((r) => (r.resultId === resultId ? { ...r, ...change(r) } : r)),
+  }))
+}
+
+const encoder = new TextEncoder()
+
+/** The UTF-16 offset of byte offset `byte` in `text`. */
+export function byteToUtf16(text: string, byte: number): number {
+  let bytes = 0
+  let i = 0
+  while (i < text.length && bytes < byte) {
+    const code = text.codePointAt(i) ?? 0
+    bytes += encoder.encode(String.fromCodePoint(code)).length
+    i += code > 0xffff ? 2 : 1
+  }
+  return i
+}
+
+/** The text the front tab would run, and where it starts: the selection, the statement under the cursor, or everything. */
+async function textToRun(
+  tab: Tab,
+  profile: Profile,
+  mode: 'statement' | 'all',
+): Promise<{ script: string; offset: number } | null> {
+  if (mode === 'all') return { script: tab.sql, offset: 0 }
+  const selected = selectionIn(tab.id)
+  if (selected) return { script: tab.sql.slice(selected.from, selected.to), offset: selected.from }
+  const range = await ipc.statementAt(tab.sql, profile.engine, tab.cursor)
+  if (!range) return null
+  return { script: tab.sql.slice(range.start, range.end), offset: range.start }
+}
+
+async function sessionFor(tab: Tab): Promise<{ profile: Profile; session: SessionInfo } | null> {
+  const profile = profileById(tab.profileId)
+  if (!profile) {
+    say('Pick a database for this tab first.')
+    openDialog({ kind: 'switcher' })
+    return null
+  }
+  try {
+    return { profile, session: await ensureSession(profile.id, tab.database) }
+  } catch (err) {
+    if (!(isQsError(err) && err.kind === 'cancelled')) say(errorText(err), true)
+    return null
+  }
+}
+
+/** Runs the selection, the statement under the cursor, or everything, in the front tab. */
 export async function runActive(mode: 'statement' | 'all') {
   const tab = activeTab()
-  if (!tab) return
-  if (tab.run?.status === 'running') return
+  if (!tab || tab.run?.status === 'running') return
   const profile = profileById(tab.profileId)
   if (!profile) {
     say('Pick a database for this tab first.')
     openDialog({ kind: 'switcher' })
     return
   }
-  let script = tab.sql
-  let offset = 0
-  if (mode === 'statement') {
-    const range = await ipc.statementAt(tab.sql, profile.engine, tab.cursor)
-    if (!range) return
-    script = tab.sql.slice(range.start, range.end)
-    offset = range.start
-  }
-  if (script.trim() === '') return
+  const text = await textToRun(tab, profile, mode)
+  if (!text || text.script.trim() === '') return
+  await runScript(tab.id, text.script, text.offset, ROW_CAP)
+}
 
-  let session: SessionInfo
-  try {
-    session = await ensureSession(profile.id, tab.database)
-  } catch (err) {
-    if (!(isQsError(err) && err.kind === 'cancelled')) say(errorText(err), true)
-    return
-  }
+/** Runs the front tab's last script again with no row cap. */
+export async function runAgainUncapped() {
+  const tab = activeTab()
+  const run = tab?.run
+  if (!tab || !run || run.status === 'running') return
+  await runScript(tab.id, run.script, run.offset, null)
+}
+
+async function runScript(tabId: string, script: string, offset: number, rowCap: number | null) {
+  const tab = get().tabs.find((t) => t.id === tabId)
+  if (!tab) return
+  const target = await sessionFor(tab)
+  if (!target) return
+  const { profile, session } = target
   freeResults(tab)
   updateTab(tab.id, {
+    view: 'results',
     run: {
       status: 'running',
       runId: null,
+      script,
       offset,
+      rowCap,
+      starts: [],
       statements: [],
-      resultId: null,
-      columns: [],
-      rows: [],
+      results: [],
+      shown: 0,
       elapsedMs: null,
       error: null,
       errorIndex: null,
+      errorAt: null,
     },
   })
   set({ selection: null, message: null })
-
-  const finish = async (resultId: number | null) => {
-    if (resultId === null) return
-    try {
-      const page = await ipc.fetchPage(resultId, 0, PREVIEW_ROWS)
-      updateRun(tab.id, () => ({ rows: page.rows }))
-    } catch (err) {
-      say(`Could not read the result: ${errorText(err)}`, true)
-    }
-  }
 
   try {
     const runId = await ipc.run(
       session.id,
       script,
-      ROW_CAP,
+      rowCap,
       (event) => {
         switch (event.event) {
+          case 'statementStarted':
+            updateRun(tab.id, (r) => {
+              const starts = [...r.starts]
+              starts[event.index] = offset + byteToUtf16(script, event.span.start)
+              return { starts }
+            })
+            break
           case 'resultStarted':
             updateRun(tab.id, (r) => ({
-              resultId: event.resultId,
-              columns: event.columns,
-              rows: [],
+              results: [
+                ...r.results,
+                {
+                  index: event.index,
+                  resultId: event.resultId,
+                  columns: event.columns,
+                  rows: 0,
+                  done: false,
+                  sort: null,
+                  version: 0,
+                },
+              ],
+              // Follow the newest result while the run is going.
+              shown: r.results.length,
               statements: [...r.statements, { index: event.index, resultId: event.resultId, outcome: null }],
             }))
+            break
+          case 'progress':
+            updateResult(tab.id, event.resultId, () => ({ rows: event.rows }))
             break
           case 'statementFinished':
             updateRun(tab.id, (r) => {
@@ -536,16 +663,39 @@ export async function runActive(mode: 'statement' | 'all') {
               const statements = known
                 ? r.statements.map((s) => (s.index === event.index ? { ...s, outcome: event.outcome } : s))
                 : [...r.statements, { index: event.index, resultId: event.resultId, outcome: event.outcome }]
-              return { statements }
+              const results = r.results.map((res) =>
+                res.resultId === event.resultId
+                  ? { ...res, rows: event.outcome.rowsReturned, done: true }
+                  : res,
+              )
+              return { statements, results }
             })
             break
           case 'finished':
-            updateRun(tab.id, () => ({ status: 'done', elapsedMs: event.elapsedMs }))
-            void finish(currentRun(tab.id)?.resultId ?? null)
+            updateRun(tab.id, (r) => ({
+              status: 'done',
+              elapsedMs: event.elapsedMs,
+              results: r.results.map((res) => ({ ...res, done: true })),
+            }))
+            void refreshCounts(tab.id)
             break
           case 'failed':
-            updateRun(tab.id, () => ({ status: 'failed', error: event.error, errorIndex: event.index }))
-            void finish(currentRun(tab.id)?.resultId ?? null)
+            updateRun(tab.id, (r) => {
+              const error = event.error
+              let errorAt: number | null = null
+              if (error.kind === 'query' && error.position !== null && event.index !== null) {
+                const start = r.starts[event.index]
+                if (start !== undefined) errorAt = start + error.position - 1
+              }
+              return {
+                status: 'failed',
+                error,
+                errorIndex: event.index,
+                errorAt,
+                results: r.results.map((res) => ({ ...res, done: true })),
+              }
+            })
+            void refreshCounts(tab.id)
             break
         }
       },
@@ -558,6 +708,19 @@ export async function runActive(mode: 'statement' | 'all') {
   }
 }
 
+/** Reads every result's final row count, which the last progress event may not have had. */
+async function refreshCounts(tabId: string) {
+  const run = currentRun(tabId)
+  for (const r of run?.results ?? []) {
+    try {
+      const info = await ipc.resultInfo(r.resultId)
+      updateResult(tabId, r.resultId, () => ({ rows: info.rows }))
+    } catch {
+      // Closed meanwhile.
+    }
+  }
+}
+
 function currentRun(tabId: string): RunState | null {
   return get().tabs.find((t) => t.id === tabId)?.run ?? null
 }
@@ -565,6 +728,79 @@ function currentRun(tabId: string): RunState | null {
 export function cancelActive() {
   const run = activeTab()?.run
   if (run?.status === 'running' && run.runId !== null) void ipc.cancelRun(run.runId)
+}
+
+/** Shows result `index` of the front tab's run. */
+export function showResult(index: number) {
+  const tab = activeTab()
+  if (tab) updateRun(tab.id, () => ({ shown: index }))
+}
+
+/** Sorts a result by a column; `null` restores the order the rows arrived in. */
+export async function sortResult(
+  tabId: string,
+  resultId: number,
+  sort: { column: number; direction: SortDirection } | null,
+) {
+  try {
+    await ipc.sortResult(resultId, sort?.column ?? null, sort?.direction)
+    updateResult(tabId, resultId, (r) => ({ sort, version: r.version + 1 }))
+  } catch (err) {
+    say(`Could not sort: ${errorText(err)}`, true)
+  }
+}
+
+export function setView(view: Tab['view']) {
+  const tab = activeTab()
+  if (tab) updateTab(tab.id, { view })
+}
+
+/** Explains the selection or the statement under the cursor, without running it. */
+export async function explainActive() {
+  const tab = activeTab()
+  if (!tab) return
+  const target = await sessionFor(tab)
+  if (!target) return
+  const text = await textToRun(tab, target.profile, 'statement')
+  if (!text || text.script.trim() === '') return
+  const sql = text.script
+  updateTab(tab.id, { view: 'plan', plan: { status: 'loading', sql } })
+  try {
+    const plan = await ipc.explain(target.session.id, sql)
+    updateTab(tab.id, { plan: { status: 'ready', sql, plan } })
+  } catch (err) {
+    updateTab(tab.id, { plan: { status: 'failed', sql, error: errorText(err) } })
+  }
+}
+
+/**
+ * The query a table tab's filter bar runs: everything from the table, with
+ * `filter` as its WHERE clause (or ORDER BY, LIMIT…, when it starts with one).
+ */
+export function filteredQuery(engine: Profile['engine'], table: TableSource, filter: string): string {
+  const name =
+    table.schema && !(engine === 'sqlite' && table.schema === 'main')
+      ? `${quoteIdent(table.schema, engine)}.${quoteIdent(table.name, engine)}`
+      : quoteIdent(table.name, engine)
+  const condition = filter.trim().replace(/;+\s*$/, '')
+  if (condition === '') return `SELECT * FROM ${name};\n`
+  const clause = /^(order\s+by|limit|offset|group\s+by|where)\b/i.test(condition)
+    ? condition
+    : `WHERE ${condition}`
+  return `SELECT * FROM ${name} ${clause};\n`
+}
+
+/**
+ * Puts the filtered query in the editor, where it can be read, and runs it.
+ */
+export async function applyFilter(filter: string) {
+  const tab = activeTab()
+  const profile = profileById(tab?.profileId ?? null)
+  if (!tab?.table || !profile) return
+  const sql = filteredQuery(profile.engine, tab.table, filter)
+  updateTab(tab.id, { filter, sql, cursor: 0 })
+  persistTab({ ...tab, sql }, true)
+  await runScript(tab.id, sql, 0, ROW_CAP)
 }
 
 // --- Navigator ----------------------------------------------------------------

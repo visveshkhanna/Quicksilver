@@ -1,24 +1,27 @@
-import { useEffect, useRef } from 'react'
+import { useMemo, useState } from 'react'
+import { Group, Panel, Separator, useDefaultLayout } from 'react-resizable-panels'
 import { Kbd } from '../../app/Kbd'
 import { Button, ColorDot } from '../../app/ui'
 import { binding } from '../../keymap/keymap'
 import { COLORS } from '../../lib/target'
 import {
   activateTab,
+  applyFilter,
   cancelActive,
   closeTab,
+  explainActive,
   newTab,
   openDialog,
-  PREVIEW_ROWS,
-  ROW_CAP,
-  type RunState,
   runActive,
-  select,
   setTabCursor,
   setTabText,
   type Tab,
   useApp,
 } from '../../state/app'
+import { panelStorage } from '../../state/layoutStorage'
+import { SqlEditor } from '../editor/SqlEditor'
+import { schemaSourceFor } from '../editor/schemaSource'
+import { Results } from '../results/Results'
 
 const HINTS = ['switch-database', 'go-to-object', 'command-palette', 'new-tab', 'new-connection']
 
@@ -113,18 +116,13 @@ function Welcome() {
 
 function TabBody({ tab }: { tab: Tab }) {
   const profile = useApp((s) => s.profiles.find((p) => p.id === tab.profileId))
-  const editor = useRef<HTMLTextAreaElement>(null)
   const running = tab.run?.status === 'running'
-
-  // Put the cursor back where it was when the tab comes to the front (the
-  // body is keyed by tab, so this runs once per switch).
-  // biome-ignore lint/correctness/useExhaustiveDependencies: only on mount
-  useEffect(() => {
-    const area = editor.current
-    if (!area) return
-    area.focus()
-    area.setSelectionRange(tab.cursor, tab.cursor)
-  }, [])
+  const layout = useDefaultLayout({ id: 'editor-results', storage: panelStorage })
+  const engine = profile?.engine ?? null
+  const target = useMemo(
+    () => ({ profileId: tab.profileId, database: tab.database }),
+    [tab.profileId, tab.database],
+  )
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -151,6 +149,13 @@ function TabBody({ tab }: { tab: Tab }) {
             <Button onClick={cancelActive}>Cancel</Button>
           ) : (
             <>
+              <Button
+                onClick={() => void explainActive()}
+                disabled={!profile}
+                title="Explain without running"
+              >
+                Explain
+              </Button>
               <Button onClick={() => void runActive('all')} disabled={!profile} title="Run everything">
                 Run all
               </Button>
@@ -161,137 +166,69 @@ function TabBody({ tab }: { tab: Tab }) {
           )}
         </span>
       </div>
-      <textarea
-        ref={editor}
-        // The editor is a plain text area until phase 5 brings CodeMirror.
-        aria-label="SQL editor"
+      {tab.table && profile && <FilterBar tab={tab} />}
+      <Group
+        orientation="vertical"
+        className="min-h-0 flex-1"
+        defaultLayout={layout.defaultLayout}
+        onLayoutChanged={layout.onLayoutChanged}
+      >
+        <Panel id="editor" defaultSize="40%" minSize="80px">
+          <SqlEditor
+            tabId={tab.id}
+            doc={tab.sql}
+            cursor={tab.cursor}
+            engine={engine}
+            errorAt={tab.run?.errorAt ?? null}
+            placeholderText={
+              profile ? 'SELECT …' : 'Choose a database with the switcher, then type SQL here.'
+            }
+            schema={() => schemaSourceFor(target)}
+            onChange={(sql, cursor) => setTabText(tab.id, sql, cursor)}
+            onCursor={(cursor) => setTabCursor(tab.id, cursor)}
+          />
+        </Panel>
+        <Separator className="h-px bg-border transition-colors hover:bg-accent data-[separator=active]:bg-accent" />
+        <Panel id="results" minSize="80px">
+          <Results tab={tab} engine={engine} />
+        </Panel>
+      </Group>
+    </div>
+  )
+}
+
+/** On a table's tab: a WHERE clause (or ORDER BY …) that rewrites the query and runs it. */
+function FilterBar({ tab }: { tab: Tab }) {
+  const [text, setText] = useState(tab.filter)
+  return (
+    <form
+      className="flex h-8 shrink-0 items-center gap-2 border-b border-border px-2"
+      onSubmit={(e) => {
+        e.preventDefault()
+        void applyFilter(text)
+      }}
+    >
+      <label htmlFor={`filter-${tab.id}`} className="shrink-0 font-mono text-[12px] font-semibold text-muted">
+        WHERE
+      </label>
+      <input
+        id={`filter-${tab.id}`}
+        aria-label="Filter rows"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape' && text !== '') {
+            e.preventDefault()
+            setText('')
+            void applyFilter('')
+          }
+        }}
+        placeholder="a condition, or ORDER BY …; Enter runs it"
         spellCheck={false}
         autoCapitalize="off"
         autoCorrect="off"
-        value={tab.sql}
-        placeholder={profile ? 'SELECT …' : 'Choose a database with the switcher, then type SQL here.'}
-        onChange={(e) => setTabText(tab.id, e.target.value, e.target.selectionStart)}
-        onSelect={(e) => setTabCursor(tab.id, e.currentTarget.selectionStart)}
-        onKeyDown={(e) => {
-          if (e.key === 'Tab' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
-            e.preventDefault()
-            const area = e.currentTarget
-            const { selectionStart: start, selectionEnd: end, value } = area
-            const next = `${value.slice(0, start)}  ${value.slice(end)}`
-            setTabText(tab.id, next, start + 2)
-            requestAnimationFrame(() => area.setSelectionRange(start + 2, start + 2))
-          }
-        }}
-        className="min-h-24 flex-[2] resize-none bg-bg p-3 font-mono text-[13px] leading-relaxed outline-none"
+        className="min-w-0 flex-1 bg-transparent font-mono text-[12px] outline-none"
       />
-      <Results run={tab.run} />
-    </div>
-  )
-}
-
-function Results({ run }: { run: RunState | null }) {
-  if (!run) {
-    return (
-      <section
-        aria-label="Results"
-        className="flex flex-1 items-center justify-center border-t border-border text-muted"
-      >
-        <span className="flex items-center gap-2">
-          Run a statement with <Kbd id="run-statement" />, or everything with <Kbd id="run-all" />
-        </span>
-      </section>
-    )
-  }
-  const last = run.statements[run.statements.length - 1]
-  const capped = run.statements.some((s) => s.outcome?.capped)
-  return (
-    <section aria-label="Results" className="flex min-h-0 flex-[3] flex-col border-t border-border">
-      {run.status === 'running' && <p className="px-3 py-2 text-muted">Running…</p>}
-      {run.error && <ErrorBox run={run} />}
-      {run.status !== 'running' && !run.error && run.resultId === null && last?.outcome && (
-        <p className="px-3 py-2 text-muted">
-          {last.outcome.rowsAffected !== null
-            ? `${last.outcome.rowsAffected.toLocaleString()} row${last.outcome.rowsAffected === 1 ? '' : 's'} affected`
-            : 'Done'}{' '}
-          · {run.statements.length} statement{run.statements.length === 1 ? '' : 's'}
-        </p>
-      )}
-      {run.resultId !== null && run.columns.length > 0 && (
-        <div className="min-h-0 flex-1 overflow-auto">
-          <table className="border-collapse font-mono text-[12px]">
-            <thead className="sticky top-0 bg-panel">
-              <tr>
-                {run.columns.map((c, i) => (
-                  <th
-                    // biome-ignore lint/suspicious/noArrayIndexKey: columns can share names
-                    key={i}
-                    title={c.dbType}
-                    className="border-r border-b border-border px-2 py-1 text-left font-semibold whitespace-nowrap"
-                  >
-                    {c.name}
-                    <span className="ml-1 font-normal text-muted">{c.dbType}</span>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {run.rows.map((row, r) => (
-                <tr
-                  // biome-ignore lint/suspicious/noArrayIndexKey: rows are positional
-                  key={r}
-                  onClick={() => select({ kind: 'row', columns: run.columns, row })}
-                  className="hover:bg-accent/10"
-                >
-                  {row.map((cell, i) => (
-                    <td
-                      // biome-ignore lint/suspicious/noArrayIndexKey: cells are positional
-                      key={i}
-                      className={`max-w-80 truncate border-r border-b border-border/60 px-2 py-0.5 whitespace-nowrap ${
-                        cell === null ? 'text-muted italic' : ''
-                      }`}
-                    >
-                      {cell ?? 'NULL'}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {last?.outcome && last.outcome.rowsReturned > run.rows.length && (
-            <p className="px-3 py-2 text-[12px] text-muted">
-              Showing the first {PREVIEW_ROWS} of {last.outcome.rowsReturned.toLocaleString()} rows
-              {capped ? ` (the run stopped at ${ROW_CAP.toLocaleString()})` : ''}. The full grid arrives in
-              the next release.
-            </p>
-          )}
-        </div>
-      )}
-    </section>
-  )
-}
-
-function ErrorBox({ run }: { run: RunState }) {
-  const error = run.error
-  if (!error) return null
-  if (error.kind === 'cancelled') return <p className="px-3 py-2 text-muted">Cancelled.</p>
-  const message = 'message' in error ? error.message : error.kind
-  return (
-    <div role="alert" className="m-2 rounded border border-[#e5484d]/40 bg-[#e5484d]/8 px-3 py-2">
-      <p className="font-semibold text-[#e5484d]">
-        {run.errorIndex !== null && run.statements.length > 0 ? `Statement ${run.errorIndex + 1}: ` : ''}
-        {message}
-      </p>
-      {error.kind === 'query' && (
-        <p className="mt-1 text-[12px] text-muted">
-          {[
-            error.code && `code ${error.code}`,
-            error.position !== null && `at character ${error.position}`,
-            error.detail,
-          ]
-            .filter(Boolean)
-            .join(' · ')}
-        </p>
-      )}
-    </div>
+    </form>
   )
 }

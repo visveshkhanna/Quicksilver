@@ -11,4 +11,10 @@ if (typeof window !== 'undefined') {
   Element.prototype.scrollIntoView ??= () => {}
   Element.prototype.hasPointerCapture ??= () => false
   Element.prototype.releasePointerCapture ??= () => {}
+  // jsdom has no canvas; the grid draws nothing and keeps working.
+  HTMLCanvasElement.prototype.getContext = (() => null) as typeof HTMLCanvasElement.prototype.getContext
+  // CodeMirror measures text with ranges, which jsdom does not lay out.
+  Range.prototype.getClientRects ??= () =>
+    ({ length: 0, item: () => null, [Symbol.iterator]: [][Symbol.iterator] }) as unknown as DOMRectList
+  Range.prototype.getBoundingClientRect ??= () => new DOMRect()
 }

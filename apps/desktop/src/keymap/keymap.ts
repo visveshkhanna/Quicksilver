@@ -11,6 +11,11 @@ export type Binding = {
   /** The default keys, such as `Mod+Shift+P`. */
   keys: string
   title: string
+  /**
+   * Where it applies: everywhere (the default), or only while the results
+   * grid has focus.
+   */
+  scope?: 'grid'
 }
 
 export const BINDINGS: readonly Binding[] = [
@@ -20,7 +25,7 @@ export const BINDINGS: readonly Binding[] = [
   { id: 'new-tab', keys: 'Mod+T', title: 'New query tab' },
   { id: 'close-tab', keys: 'Mod+W', title: 'Close tab' },
   { id: 'reopen-tab', keys: 'Mod+Shift+T', title: 'Reopen closed tab' },
-  { id: 'run-statement', keys: 'Mod+Enter', title: 'Run statement under cursor' },
+  { id: 'run-statement', keys: 'Mod+Enter', title: 'Run the selection, or the statement under the cursor' },
   { id: 'run-all', keys: 'Mod+Shift+Enter', title: 'Run everything' },
   { id: 'cancel-query', keys: 'Mod+.', title: 'Cancel running query' },
   { id: 'focus-navigator', keys: 'Mod+Shift+E', title: 'Focus navigator filter' },
@@ -28,7 +33,27 @@ export const BINDINGS: readonly Binding[] = [
   { id: 'toggle-navigator', keys: 'Mod+B', title: 'Show or hide the navigator' },
   { id: 'toggle-inspector', keys: 'Mod+Shift+I', title: 'Show or hide the inspector' },
   { id: 'keyboard-shortcuts', keys: 'Mod+,', title: 'Keyboard shortcuts' },
+  { id: 'explain-statement', keys: 'Mod+E', title: 'Explain the statement under the cursor' },
+  { id: 'format-sql', keys: 'Mod+Shift+F', title: 'Format the selection, or everything' },
+  { id: 'toggle-focus', keys: 'Mod+J', title: 'Switch focus between the editor and the results' },
+  { id: 'copy-cells', keys: 'Mod+C', title: 'Copy the selected cells', scope: 'grid' },
+  {
+    id: 'copy-cells-with-header',
+    keys: 'Mod+Shift+C',
+    title: 'Copy the selected cells with column names',
+    scope: 'grid',
+  },
+  { id: 'select-all-cells', keys: 'Mod+A', title: 'Select every cell', scope: 'grid' },
+  { id: 'inspect-row', keys: 'Space', title: 'Show the row in the inspector', scope: 'grid' },
 ]
+
+/** Keys the grid handles that cannot be rebound. */
+export const GRID_FIXED_KEYS = [
+  ['Arrows', 'Move the cell cursor; with Shift, extend the selection'],
+  ['PageUp PageDown', 'Move a screen at a time'],
+  ['Mod+Up Mod+Down', 'First or last row'],
+  ['Home End', 'First or last column'],
+] as const
 
 /** `Mod+1` … `Mod+9` jump to tab N. Fixed, so not in `BINDINGS`. */
 export const TAB_JUMP_KEYS = 'Mod+1…9'
@@ -150,13 +175,16 @@ export function matches(keys: string, event: KeyEventLike, platform: Platform): 
   return spelled !== null && canonical(spelled) === canonical(keys)
 }
 
-/** The binding `event` triggers, if any. */
+/** The binding `event` triggers in `scope` (the whole app by default), if any. */
 export function bindingFor(
   event: KeyEventLike,
   overrides: Overrides,
   platform: Platform,
+  scope: 'app' | 'grid' = 'app',
 ): Binding | undefined {
-  return BINDINGS.find((b) => matches(keysFor(b.id, overrides), event, platform))
+  return BINDINGS.find(
+    (b) => (b.scope ?? 'app') === scope && matches(keysFor(b.id, overrides), event, platform),
+  )
 }
 
 /** For `Mod+1` … `Mod+9`, the tab index (0-based); otherwise `null`. */

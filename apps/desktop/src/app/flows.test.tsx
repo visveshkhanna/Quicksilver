@@ -38,7 +38,7 @@ async function start(options: Parameters<typeof fakeBackend>[0] = { profiles: [p
   return { backend, user }
 }
 
-const tabs = () => screen.queryAllByRole('tab', { name: /Query/ })
+const tabs = () => within(screen.getByRole('tablist', { name: 'Query tabs' })).queryAllByRole('tab')
 const activeTitle = () => useApp.getState().tabs.find((t) => t.id === useApp.getState().activeTabId)
 
 beforeEach(() => resetApp())
@@ -162,9 +162,7 @@ describe('tabs', () => {
     await boot()
     render(<App />)
     expect(tabs()).toHaveLength(1)
-    expect((screen.getByRole('textbox', { name: 'SQL editor' }) as HTMLTextAreaElement).value).toBe(
-      'select 42',
-    )
+    expect(screen.getByRole('textbox', { name: 'SQL editor' }).textContent).toBe('select 42')
   })
 })
 
@@ -183,7 +181,11 @@ describe('Mod+P goes to an object', () => {
     await user.keyboard('{Enter}')
 
     expect(tabs()).toHaveLength(2)
-    expect(activeTitle()?.sql).toBe('SELECT * FROM "sales"."orders";\n')
+    expect(activeTitle()).toMatchObject({
+      title: 'orders',
+      sql: 'SELECT * FROM "sales"."orders";\n',
+      table: { schema: 'sales', name: 'orders' },
+    })
   })
 
   it('is not offered before the tab has a database', async () => {

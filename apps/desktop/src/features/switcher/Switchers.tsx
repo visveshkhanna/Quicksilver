@@ -155,6 +155,7 @@ export function GoToObject() {
           newTab(
             { profileId: profile.id, database: o.database },
             selectFrom(profile.engine, o.schema, o.name),
+            { schema: o.schema, name: o.name },
           )
         } else {
           select({

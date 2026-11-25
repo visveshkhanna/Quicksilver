@@ -2,18 +2,24 @@
 // shortcut and its palette entry are the same command, so they always agree.
 
 import { useEffect } from 'react'
+import { editorFor } from '../features/editor/registry'
+import { formatIn } from '../features/editor/SqlEditor'
 import { bindingFor, currentPlatform, tabJump } from '../keymap/keymap'
 import {
   activeTab,
   cancelActive,
   closeTab,
   disconnectProfile,
+  errorText,
+  explainActive,
   newTab,
   openDialog,
+  profileById,
   reloadCatalog,
   reopenTab,
   runActive,
   type State,
+  say,
   togglePanel,
   useApp,
 } from '../state/app'
@@ -29,6 +35,16 @@ export type Command = {
 const always = () => true
 const hasTarget = (s: State) => Boolean(activeTab(s)?.profileId)
 const isRunning = (s: State) => activeTab(s)?.run?.status === 'running'
+
+/** Moves focus between the front tab's editor and its results grid. */
+export function toggleFocus() {
+  const tab = activeTab()
+  if (!tab) return
+  const grid = document.querySelector<HTMLElement>('[role="grid"][aria-label="Result rows"]')
+  const editor = editorFor(tab.id)
+  if (grid && !grid.contains(document.activeElement)) grid.focus()
+  else editor?.focus()
+}
 
 /** Focuses the navigator filter (rendered by the navigator). */
 export function focusNavigatorFilter() {
@@ -76,6 +92,30 @@ export const COMMANDS: readonly Command[] = [
     run: () => void runActive('all'),
   },
   { id: 'cancel-query', title: 'Cancel running query', enabled: isRunning, run: cancelActive },
+  {
+    id: 'explain-statement',
+    title: 'Explain the statement under the cursor',
+    enabled: hasTarget,
+    run: () => void explainActive(),
+  },
+  {
+    id: 'format-sql',
+    title: 'Format the selection, or everything',
+    enabled: (s) => Boolean(activeTab(s)),
+    run: () => {
+      const tab = activeTab()
+      if (!tab) return
+      formatIn(tab.id, profileById(tab.profileId)?.engine ?? null).catch((err) =>
+        say(`Could not format: ${errorText(err)}`, true),
+      )
+    },
+  },
+  {
+    id: 'toggle-focus',
+    title: 'Switch focus between the editor and the results',
+    enabled: (s) => Boolean(activeTab(s)),
+    run: toggleFocus,
+  },
   { id: 'focus-navigator', title: 'Focus navigator filter', enabled: always, run: focusNavigatorFilter },
   {
     id: 'new-connection',
@@ -129,7 +169,8 @@ export function command(id: string): Command | undefined {
 const platform = currentPlatform()
 
 /**
- * Listens for shortcuts on the whole window. While a dialog is open, only
+ * Listens for shortcuts on the whole window, before anything inside it
+ * sees the key. While a dialog is open, only
  * the dialog's own keys apply, except the switchers, which replace each
  * other.
  */
@@ -160,7 +201,9 @@ export function useShortcuts() {
       event.preventDefault()
       if (cmd.enabled(state)) cmd.run()
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    // Capture, so app shortcuts come before the editor's own keys: CodeMirror
+    // leaves alone any key whose default was already prevented.
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
   }, [])
 }
