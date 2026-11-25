@@ -1,0 +1,27 @@
+[package]
+name = "quicksilver"
+description = "A fast, cross-platform, multi-engine database client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+# `staticlib` and `cdylib` are what Tauri's mobile targets need; `rlib` keeps
+# the crate testable. The desktop binary links the `rlib`.
+name = "quicksilver_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+qs-service.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tauri.workspace = true
+
+[lints]
+workspace = true
