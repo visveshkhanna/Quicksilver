@@ -41,6 +41,20 @@ pub enum Color {
     Gray,
 }
 
+/// What a connection may do.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Mode {
+    /// Writes are refused by the driver (see
+    /// [`ConnectionConfig::read_only`]).
+    ReadOnly,
+    /// Reads and writes; statements that change the schema ask first.
+    #[default]
+    ReadWrite,
+    /// Everything, without asking.
+    Full,
+}
+
 /// Where a profile's password comes from when it connects.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -105,6 +119,9 @@ pub struct ProfileFields {
     /// Where the password comes from.
     #[serde(default)]
     pub auth: Auth,
+    /// What the connection may do.
+    #[serde(default)]
+    pub mode: Mode,
 }
 
 impl ProfileFields {
@@ -129,6 +146,11 @@ impl ProfileFields {
             } else {
                 Auth::NoPassword
             },
+            mode: if config.read_only {
+                Mode::ReadOnly
+            } else {
+                Mode::ReadWrite
+            },
         }
     }
 
@@ -144,6 +166,7 @@ impl ProfileFields {
         config.ssl_mode = self.ssl_mode;
         config.ssl_root_cert = self.ssl_root_cert.clone();
         config.options = self.options.clone();
+        config.read_only = self.mode == Mode::ReadOnly;
         config
     }
 
@@ -447,6 +470,10 @@ mod tests {
             back.options.get("application_name").map(String::as_str),
             Some("qs")
         );
+        let mut read_only = fields.clone();
+        read_only.mode = Mode::ReadOnly;
+        assert!(read_only.to_config(None).read_only);
+        assert!(!fields.to_config(None).read_only);
         Ok(())
     }
 }

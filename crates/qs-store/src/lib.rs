@@ -23,7 +23,7 @@ use qs_core::Result;
 use serde::{Deserialize, Serialize};
 
 pub use dirs::{Channel, DataDir};
-pub use profiles::{Auth, Color, Profile, ProfileBook, ProfileFields};
+pub use profiles::{Auth, Color, Mode, Profile, ProfileBook, ProfileFields};
 pub use secrets::{Keychain, MemorySecrets, Secrets};
 pub use state::{
     Buffer, CatalogEntry, CatalogObject, HistoryEntry, HistoryQuery, NewHistoryEntry, SavedQuery,
@@ -364,6 +364,7 @@ mod tests {
                 "engine",
                 "host",
                 "id",
+                "mode",
                 "name",
                 "options",
                 "path",
@@ -381,6 +382,7 @@ mod tests {
         );
         assert_eq!(json["color"], "purple");
         assert_eq!(json["sslMode"], "prefer");
+        assert_eq!(json["mode"], "readWrite");
         assert_eq!(
             serde_json::to_value(Auth::NoPassword).ok(),
             Some(serde_json::json!({"kind": "none"}))
