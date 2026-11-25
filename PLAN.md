@@ -1,4 +1,8 @@
-# Quicksilver: build plan (v2, for review)
+# Quicksilver: build plan (v2)
+
+**Status:** architecture confirmed (Tauri 2, Apache-2.0). Phase 1 is done
+locally. Its exit criterion (CI green on all three OSes and a `v0.0.1`
+pre-release) is met once the repository is pushed and tagged.
 
 Quicksilver is a fast, cross-platform, multi-engine database client with a
 DBeaver-style layout and keyboard-first navigation. It is **written from
@@ -7,16 +11,12 @@ code is copied or adapted from it, so its GPL-3.0 licence does not apply. A
 docs website, modelled on `../../Switchboard/apps/docs`, is built last and
 served from Cloudflare Workers.
 
-> **For review:** section 1 (architecture) is the main decision to confirm.
-> Everything after it assumes that choice.
-
 ## 0. Ground rules
 
 - **Clean room.** Read dbdelve's docs, behaviour and tests to learn *what* to
   handle (SSL modes, IAM usernames, no-PK edits). Write every line ourselves.
   Do not paste or translate its source.
-- **Licence:** Apache-2.0 (same as Switchboard). MIT works too; pick one in
-  phase 1.
+- **Licence:** Apache-2.0 (same as Switchboard).
 - **Commits and PRs:** no AI attribution trailers or "generated with" lines.
 - **Out of scope:** theme picker and imports (only light and dark, following
   the OS), glass effects, ER diagrams, telemetry, and anything paywalled.
@@ -37,7 +37,7 @@ served from Cloudflare Workers.
 6. The UI never sees driver types. It gets typed cells (a rendered string
    plus a type tag) through one API.
 
-## 1. Architecture (decision to confirm)
+## 1. Architecture (confirmed)
 
 ### Recommendation: Tauri 2, with a Rust core and a TypeScript UI
 
