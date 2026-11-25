@@ -3,7 +3,7 @@
 /**
  * A text format for rows.
  */
-export type Format = { "kind": "tsv", 
+export type CopyFormat = { "kind": "tsv", 
 /**
  * Whether the first line names the columns.
  */

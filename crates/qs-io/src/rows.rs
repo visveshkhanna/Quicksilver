@@ -9,7 +9,7 @@ use serde::Deserialize;
 
 /// A text format for rows.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[ts(export, rename = "CopyFormat")]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
