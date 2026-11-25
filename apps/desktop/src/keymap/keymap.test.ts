@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { BINDINGS, binding, currentPlatform, formatKeys } from './keymap'
+import {
+  BINDINGS,
+  binding,
+  bindingFor,
+  conflictFor,
+  currentPlatform,
+  eventToKeys,
+  formatKeys,
+  keysFor,
+  matches,
+  tabJump,
+} from './keymap'
 
 describe('formatKeys', () => {
   it('uses symbols on macOS', () => {
@@ -28,5 +39,56 @@ describe('BINDINGS', () => {
 
   it('throws on an unknown id', () => {
     expect(() => binding('nope')).toThrow()
+  })
+})
+
+const ev = (code: string, mods: Partial<KeyboardEvent> = {}) =>
+  ({
+    key: '',
+    code,
+    metaKey: false,
+    ctrlKey: false,
+    altKey: false,
+    shiftKey: false,
+    ...mods,
+  }) as KeyboardEvent
+
+describe('matching key events', () => {
+  it('reads Mod as Cmd on macOS and Ctrl elsewhere', () => {
+    expect(matches('Mod+K', ev('KeyK', { metaKey: true }), 'mac')).toBe(true)
+    expect(matches('Mod+K', ev('KeyK', { ctrlKey: true }), 'mac')).toBe(false)
+    expect(matches('Mod+K', ev('KeyK', { ctrlKey: true }), 'other')).toBe(true)
+  })
+
+  it('needs the exact modifiers', () => {
+    expect(matches('Mod+K', ev('KeyK', { ctrlKey: true, shiftKey: true }), 'other')).toBe(false)
+    expect(matches('Mod+Shift+P', ev('KeyP', { ctrlKey: true, shiftKey: true }), 'other')).toBe(true)
+  })
+
+  it('uses the physical key, so Shift does not change punctuation', () => {
+    expect(matches('Mod+.', { ...ev('Period', { metaKey: true }), key: '>' }, 'mac')).toBe(true)
+    expect(matches('Mod+Shift+Enter', ev('NumpadEnter', { ctrlKey: true, shiftKey: true }), 'other')).toBe(
+      true,
+    )
+  })
+
+  it('records an event as binding keys', () => {
+    expect(eventToKeys(ev('KeyY', { metaKey: true, shiftKey: true }), 'mac')).toBe('Mod+Shift+Y')
+    expect(eventToKeys({ ...ev('ShiftLeft', { shiftKey: true }), key: 'Shift' }, 'mac')).toBeNull()
+  })
+
+  it('applies overrides and finds conflicts', () => {
+    const overrides = { 'new-tab': 'Mod+Y', 'close-tab': '' }
+    expect(bindingFor(ev('KeyY', { ctrlKey: true }), overrides, 'other')?.id).toBe('new-tab')
+    expect(bindingFor(ev('KeyT', { ctrlKey: true }), overrides, 'other')).toBeUndefined()
+    expect(bindingFor(ev('KeyW', { ctrlKey: true }), overrides, 'other')).toBeUndefined()
+    expect(conflictFor('new-tab', 'Mod+K', overrides)?.id).toBe('switch-database')
+    expect(keysFor('close-tab', overrides)).toBe('')
+  })
+
+  it('jumps to tabs with Mod+1 to Mod+9', () => {
+    expect(tabJump(ev('Digit3', { metaKey: true }), 'mac')).toBe(2)
+    expect(tabJump(ev('Digit0', { metaKey: true }), 'mac')).toBeNull()
+    expect(tabJump(ev('Digit3', { metaKey: true, shiftKey: true }), 'mac')).toBeNull()
   })
 })
