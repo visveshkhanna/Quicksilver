@@ -1,0 +1,15 @@
+[package]
+name = "qs-sql"
+description = "Statement splitting, parse-tree gates and generated SQL"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+qs-core.workspace = true
+
+[lints]
+workspace = true

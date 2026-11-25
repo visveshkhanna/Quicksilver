@@ -1,0 +1,53 @@
+# The version here is the one version for the whole project. `scripts/version.mjs`
+# keeps the package.json files in step with it, and CI fails when they drift.
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.88"
+repository = "https://github.com/visveshkhanna/Quicksilver"
+
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/desktop/src-tauri"]
+
+[workspace.dependencies]
+qs-core = { path = "crates/qs-core" }
+qs-sql = { path = "crates/qs-sql" }
+qs-net = { path = "crates/qs-net" }
+qs-drivers = { path = "crates/qs-drivers" }
+qs-store = { path = "crates/qs-store" }
+qs-io = { path = "crates/qs-io" }
+qs-service = { path = "crates/qs-service" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tracing = "0.1"
+
+tauri = { version = "~2.11", features = [] }
+tauri-build = { version = "~2.6", features = [] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+dbg_macro = "warn"
+todo = "warn"
+unwrap_used = "warn"
+
+[profile.dev]
+# Keep our own crates quick to rebuild but run dependencies optimised, so the
+# app feels like the release build while developing.
+opt-level = 0
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = true

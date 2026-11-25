@@ -1,0 +1,29 @@
+# Rust
+/target/
+**/target/
+
+# Node
+node_modules/
+dist/
+.turbo/
+*.tsbuildinfo
+
+# Tauri
+apps/desktop/src-tauri/gen/schemas/
+
+# Docs (phase 10)
+apps/docs/.next/
+apps/docs/out/
+apps/docs/.source/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+
+# Local env
+.env
+.env.*
+!.env.example

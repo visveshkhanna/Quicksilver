@@ -1,0 +1,16 @@
+[package]
+name = "qs-drivers"
+description = "One driver per database engine, behind cargo features"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+qs-core.workspace = true
+qs-net.workspace = true
+
+[lints]
+workspace = true

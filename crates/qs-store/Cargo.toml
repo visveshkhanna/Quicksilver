@@ -1,0 +1,15 @@
+[package]
+name = "qs-store"
+description = "Profiles, keychain, history and layout state"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+qs-core.workspace = true
+
+[lints]
+workspace = true
