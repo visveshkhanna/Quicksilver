@@ -97,7 +97,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # Live tests are #[ignore]d so `cargo test` needs no database; this job
       # runs only those, against the containers above.
-      - run: cargo test --workspace --locked -- --ignored
+      # The keychain test needs a desktop session; CI runners have none.
+      - run: cargo test --workspace --locked -- --ignored --skip the_os_keychain_round_trips
       - name: Database logs
         if: failure()
         run: docker compose -f dev/compose.yaml logs

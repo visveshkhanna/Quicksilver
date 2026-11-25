@@ -62,7 +62,7 @@ pnpm check                                 # biome, tsc, vitest, version check
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace                     # no database needed
-cargo test --workspace -- --ignored        # live tests, needs dev/compose.yaml up
+cargo test --workspace -- --ignored        # live tests (and the keychain), needs dev/compose.yaml up
 cargo test -p qs-store -- --ignored       # round-trips the real OS keychain
 pnpm tauri build                           # installers in target/release/bundle
 ```
