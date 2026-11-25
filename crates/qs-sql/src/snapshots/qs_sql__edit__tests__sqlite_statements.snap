@@ -1,0 +1,9 @@
+---
+source: crates/qs-sql/src/edit.rs
+expression: "all(Dialect::Sqlite)"
+---
+UPDATE "sales"."Order ""Items""" SET "name" = 'O''Brien \ "Pat"', "note" = NULL, "amount" = -12.50, "ok" = 't' WHERE "id" = 42 AND "region" = 'eu';
+UPDATE "sales"."Order ""Items""" SET "label" = 'b' WHERE "label" = 'a' AND "score" = 1e-3 AND "gone" IS NULL AND "blob" = X'deadbeef';
+INSERT INTO "sales"."Order ""Items""" ("id", "region", "meta", "count") VALUES (43, 'us', '{"a": [1, 2]}', 'not a number');
+INSERT INTO "sales"."Order ""Items""" DEFAULT VALUES;
+DELETE FROM "sales"."Order ""Items""" WHERE "id" = 42 AND "region" = 'eu'

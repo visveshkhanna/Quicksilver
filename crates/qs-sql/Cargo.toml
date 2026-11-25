@@ -10,6 +10,14 @@ publish = false
 
 [dependencies]
 qs-core.workspace = true
+serde.workspace = true
+ts-rs.workspace = true
+# Parse trees for the gates. Only parsing is used; nothing is executed or
+# rewritten through it.
+sqlparser = { version = "0.64", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+insta = "1.49"
 
 [lints]
 workspace = true
