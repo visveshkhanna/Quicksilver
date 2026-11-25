@@ -15,8 +15,8 @@ use rusqlite::types::ValueRef;
 use rusqlite::{ErrorCode, InterruptHandle, OpenFlags};
 
 use crate::{
-    CancellationToken, CapCounter, ColumnInfo, DbObject, ExecuteOptions, ObjectKind, ResultSink,
-    RowView, Span, StatementOutcome, render,
+    CancellationToken, CapCounter, ColumnInfo, DbObject, ExecuteOptions, ForeignKey, ObjectKind,
+    Plan, PlanNode, ResultSink, RowView, Span, StatementOutcome, render,
 };
 
 /// An open SQLite database.
@@ -229,6 +229,153 @@ impl SqliteConnection {
             Ok(columns)
         })
     }
+}
+
+impl SqliteConnection {
+    pub(crate) async fn foreign_keys(&self, schema: &str) -> Result<Vec<ForeignKey>> {
+        tokio::task::block_in_place(|| {
+            let conn = self.lock()?;
+            // `to` is NULL when a key refers to the parent's primary key
+            // without naming its columns.
+            let mut stmt = conn
+                .prepare(
+                    "SELECT t.name, k.id, k.\"table\", k.\"from\", k.\"to\" \
+                     FROM pragma_table_list t, pragma_foreign_key_list(t.name, t.schema) k \
+                     WHERE t.schema = ?1 AND t.type = 'table' ORDER BY t.name, k.id, k.seq",
+                )
+                .map_err(map_err)?;
+            let rows = stmt
+                .query_map([schema], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                    ))
+                })
+                .map_err(map_err)?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(map_err)?;
+            let mut keys: Vec<(String, i64, ForeignKey, bool)> = Vec::new();
+            for (table, id, parent, from, to) in rows {
+                let same = keys
+                    .last()
+                    .is_some_and(|(t, i, _, _)| *t == table && *i == id);
+                if !same {
+                    keys.push((
+                        table.clone(),
+                        id,
+                        ForeignKey {
+                            name: None,
+                            schema: schema.to_owned(),
+                            table,
+                            columns: Vec::new(),
+                            ref_schema: schema.to_owned(),
+                            ref_table: parent,
+                            ref_columns: Vec::new(),
+                        },
+                        false,
+                    ));
+                }
+                let (_, _, key, implicit) = keys.last_mut().expect("just pushed");
+                key.columns.push(from);
+                match to {
+                    Some(to) => key.ref_columns.push(to),
+                    None => *implicit = true,
+                }
+            }
+            let mut out = Vec::with_capacity(keys.len());
+            for (_, _, mut key, implicit) in keys {
+                if implicit {
+                    let mut pk = conn
+                        .prepare(
+                            "SELECT name FROM pragma_table_info(?1, ?2) WHERE pk > 0 ORDER BY pk",
+                        )
+                        .map_err(map_err)?;
+                    key.ref_columns = pk
+                        .query_map([&key.ref_table, &key.ref_schema], |row| row.get(0))
+                        .map_err(map_err)?
+                        .collect::<rusqlite::Result<Vec<String>>>()
+                        .map_err(map_err)?;
+                }
+                out.push(key);
+            }
+            Ok(out)
+        })
+    }
+
+    pub(crate) async fn explain(&self, statement: &str) -> Result<Plan> {
+        tokio::task::block_in_place(|| {
+            let conn = self.lock()?;
+            // `prepare` compiles only the first statement, so nothing after
+            // it can run.
+            let mut stmt = conn
+                .prepare(&format!("EXPLAIN QUERY PLAN {statement}"))
+                .map_err(map_err)?;
+            let steps = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                })
+                .map_err(map_err)?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(map_err)?;
+            let raw = steps
+                .iter()
+                .map(|(id, parent, detail)| format!("{id}\t{parent}\t{detail}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            Ok(Plan {
+                roots: sqlite_plan_children(&steps, 0),
+                raw,
+            })
+        })
+    }
+
+    pub(crate) async fn ddl(&self, schema: &str, name: &str, kind: ObjectKind) -> Result<String> {
+        if !matches!(kind, ObjectKind::Table | ObjectKind::View) {
+            return Err(Error::unsupported("SQLite has only tables and views"));
+        }
+        tokio::task::block_in_place(|| {
+            let conn = self.lock()?;
+            // The schema name cannot be a parameter here, so it is quoted.
+            let master = format!("\"{}\".sqlite_master", schema.replace('"', "\"\""));
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT sql FROM {master} WHERE sql IS NOT NULL AND (name = ?1 OR tbl_name = ?1) \
+                     ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'view' THEN 0 WHEN 'index' THEN 1 ELSE 2 END, name"
+                ))
+                .map_err(map_err)?;
+            let parts = stmt
+                .query_map([name], |row| row.get::<_, String>(0))
+                .map_err(map_err)?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(map_err)?;
+            if parts.is_empty() {
+                return Err(Error::query(format!("{schema}.{name} was not found")));
+            }
+            Ok(parts.iter().map(|p| format!("{p};\n")).collect())
+        })
+    }
+}
+
+/// The plan steps whose parent is `parent`, each with its own children.
+fn sqlite_plan_children(steps: &[(i64, i64, String)], parent: i64) -> Vec<PlanNode> {
+    steps
+        .iter()
+        .filter(|(id, p, _)| *p == parent && *id != parent)
+        .map(|(id, _, detail)| PlanNode {
+            label: detail.clone(),
+            cost: None,
+            rows: None,
+            details: Vec::new(),
+            children: sqlite_plan_children(steps, *id),
+        })
+        .collect()
 }
 
 fn describe(stmt: &rusqlite::Statement<'_>) -> Vec<Column> {

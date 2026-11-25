@@ -275,6 +275,84 @@ async fn catalog_lists_what_was_created(conn: &Connection, dialect: &Dialect) {
         "{columns:?}"
     );
 
+    // A foreign key, with and without naming the referred columns (SQLite
+    // fills them in from the primary key; Postgres needs them qualified).
+    let parent = if schema == "main" {
+        "qs_parent".to_owned()
+    } else {
+        format!("{schema}.qs_parent (region, id)")
+    };
+    run_ok(
+        conn,
+        &format!(
+            "CREATE TABLE {schema}.qs_child (cid INTEGER PRIMARY KEY, pregion TEXT, pid INTEGER, \
+             FOREIGN KEY (pregion, pid) REFERENCES {parent})"
+        ),
+    )
+    .await;
+    let keys = conn.foreign_keys(schema).await.expect("foreign keys");
+    let key = keys
+        .iter()
+        .find(|k| k.table == "qs_child")
+        .unwrap_or_else(|| panic!("{keys:?}"));
+    assert_eq!(key.columns, ["pregion", "pid"]);
+    assert_eq!(
+        (key.ref_schema.as_str(), key.ref_table.as_str()),
+        (schema.as_str(), "qs_parent")
+    );
+    assert_eq!(key.ref_columns, ["region", "id"]);
+
+    // Explain plans without running, and refuses a second statement.
+    let plan = conn
+        .explain(&format!(
+            "SELECT * FROM {schema}.qs_child c JOIN {schema}.qs_parent p ON p.id = c.pid;"
+        ))
+        .await
+        .expect("explain");
+    assert!(!plan.roots.is_empty() && !plan.raw.is_empty(), "{plan:?}");
+    let deleted = conn
+        .explain(&format!("SELECT 1; DELETE FROM {schema}.qs_parent"))
+        .await;
+    assert!(deleted.is_err());
+    let delete_plan = conn
+        .explain(&format!("DELETE FROM {schema}.qs_child"))
+        .await
+        .expect("explain a delete");
+    assert!(!delete_plan.roots.is_empty());
+    run_ok(
+        conn,
+        &format!("INSERT INTO {schema}.qs_parent (id, region) VALUES (1, 'eu')"),
+    )
+    .await;
+    run_ok(
+        conn,
+        &format!("INSERT INTO {schema}.qs_child VALUES (1, 'eu', 1)"),
+    )
+    .await;
+    conn.explain(&format!("DELETE FROM {schema}.qs_child"))
+        .await
+        .expect("explain");
+    let count = run_ok(conn, &format!("SELECT count(*) FROM {schema}.qs_child")).await;
+    assert_eq!(
+        cells(&count.only().rows[0]),
+        [Some("1")],
+        "explain ran nothing"
+    );
+
+    // DDL reads back what was created.
+    let ddl = conn
+        .ddl(schema, "qs_child", ObjectKind::Table)
+        .await
+        .expect("ddl");
+    assert!(ddl.contains("qs_child") && ddl.contains("pregion"), "{ddl}");
+    assert!(ddl.to_ascii_uppercase().contains("REFERENCES"), "{ddl}");
+    let view = conn
+        .ddl(schema, "qs_view", ObjectKind::View)
+        .await
+        .expect("view ddl");
+    assert!(view.to_ascii_uppercase().contains("VIEW"), "{view}");
+    run_ok(conn, &format!("DROP TABLE {schema}.qs_child")).await;
+
     if !dialect.drop_schema.is_empty() {
         run_ok(conn, &dialect.drop_schema).await;
     }

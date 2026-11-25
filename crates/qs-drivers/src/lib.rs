@@ -138,6 +138,66 @@ pub struct ColumnInfo {
     pub primary_key_position: Option<u32>,
 }
 
+/// A foreign key: `columns` of `table` refer to `ref_columns` of
+/// `ref_table`, pairwise.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct ForeignKey {
+    /// The constraint's name, where the engine names it.
+    pub name: Option<String>,
+    /// The schema of the referring table.
+    pub schema: String,
+    /// The referring table.
+    pub table: String,
+    /// Its referring columns, in key order.
+    pub columns: Vec<String>,
+    /// The schema of the referred table.
+    pub ref_schema: String,
+    /// The referred table.
+    pub ref_table: String,
+    /// The referred columns, in the same order.
+    pub ref_columns: Vec<String>,
+}
+
+/// One step of a query plan.
+#[derive(Debug, Clone, PartialEq, Serialize, ts_rs::TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanNode {
+    /// What the step does, such as `Seq Scan on orders` or
+    /// `SEARCH t USING INDEX i (a=?)`.
+    pub label: String,
+    /// The planner's estimated total cost, where the engine gives one.
+    pub cost: Option<f64>,
+    /// The planner's estimated row count, where the engine gives one.
+    pub rows: Option<f64>,
+    /// Everything else the engine said about the step, in its own words.
+    pub details: Vec<PlanDetail>,
+    /// The steps feeding this one.
+    pub children: Vec<PlanNode>,
+}
+
+/// One named fact about a plan step.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS)]
+#[ts(export)]
+pub struct PlanDetail {
+    /// What it is, as the engine names it (`Filter`, `Index Cond`).
+    pub name: String,
+    /// Its value, as text.
+    pub value: String,
+}
+
+/// How the engine would run a statement, without running it.
+#[derive(Debug, Clone, PartialEq, Serialize, ts_rs::TS)]
+#[ts(export)]
+pub struct Plan {
+    /// The top steps (usually one).
+    pub roots: Vec<PlanNode>,
+    /// The engine's own output, for copying.
+    pub raw: String,
+}
+
 /// An open connection to one database.
 pub enum Connection {
     /// PostgreSQL.
@@ -231,6 +291,50 @@ impl Connection {
             Connection::Postgres(conn) => conn.columns(schema, table).await,
             #[cfg(feature = "sqlite")]
             Connection::Sqlite(conn) => conn.columns(schema, table).await,
+        }
+    }
+
+    /// The foreign keys that start or end at a table in `schema`.
+    pub async fn foreign_keys(&self, schema: &str) -> Result<Vec<ForeignKey>> {
+        match self {
+            #[cfg(feature = "postgres")]
+            Connection::Postgres(conn) => conn.foreign_keys(schema).await,
+            #[cfg(feature = "sqlite")]
+            Connection::Sqlite(conn) => conn.foreign_keys(schema).await,
+        }
+    }
+
+    /// How the engine would run `statement` (one statement), without running
+    /// it: this never uses `EXPLAIN ANALYZE` or anything else that executes.
+    pub async fn explain(&self, statement: &str) -> Result<Plan> {
+        // Exactly one statement: whatever follows a `;` would otherwise run
+        // for real on engines that accept several statements in one call.
+        let statements = qs_sql::split(statement, qs_sql::Dialect::for_engine(self.engine()));
+        let statement = match statements.as_slice() {
+            [] => return Err(Error::query("there is no statement to explain")),
+            [one] => one.text,
+            _ => {
+                return Err(Error::query(
+                    "Explain works on one statement; put the cursor in the one to explain",
+                ));
+            }
+        };
+        match self {
+            #[cfg(feature = "postgres")]
+            Connection::Postgres(conn) => conn.explain(statement).await,
+            #[cfg(feature = "sqlite")]
+            Connection::Sqlite(conn) => conn.explain(statement).await,
+        }
+    }
+
+    /// The SQL that would create the object `name` of `kind` in `schema`, as
+    /// the server describes it.
+    pub async fn ddl(&self, schema: &str, name: &str, kind: ObjectKind) -> Result<String> {
+        match self {
+            #[cfg(feature = "postgres")]
+            Connection::Postgres(conn) => conn.ddl(schema, name, kind).await,
+            #[cfg(feature = "sqlite")]
+            Connection::Sqlite(conn) => conn.ddl(schema, name, kind).await,
         }
     }
 }

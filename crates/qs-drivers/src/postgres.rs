@@ -26,8 +26,8 @@ use tokio_postgres::{Client, NoTls, SimpleColumn, SimpleQueryMessage, SimpleQuer
 use tokio_postgres_rustls::MakeRustlsConnect;
 
 use crate::{
-    CancellationToken, CapCounter, ColumnInfo, DbObject, ExecuteOptions, ObjectKind, ResultSink,
-    RowView, Span, StatementOutcome,
+    CancellationToken, CapCounter, ColumnInfo, DbObject, ExecuteOptions, ForeignKey, ObjectKind,
+    Plan, PlanDetail, PlanNode, ResultSink, RowView, Span, StatementOutcome,
 };
 
 /// How long to wait for in-flight rows after a cancel before giving up on
@@ -313,6 +313,193 @@ impl PgConnection {
             .collect())
     }
 
+    pub(crate) async fn foreign_keys(&self, schema: &str) -> Result<Vec<ForeignKey>> {
+        let rows = self
+            .client
+            .query(
+                "SELECT con.conname::text, n.nspname::text, c.relname::text, \
+                        ARRAY(SELECT a.attname::text FROM unnest(con.conkey) WITH ORDINALITY AS k(num, pos) \
+                              JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.num \
+                              ORDER BY k.pos), \
+                        fn.nspname::text, fc.relname::text, \
+                        ARRAY(SELECT a.attname::text FROM unnest(con.confkey) WITH ORDINALITY AS k(num, pos) \
+                              JOIN pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = k.num \
+                              ORDER BY k.pos) \
+                 FROM pg_constraint con \
+                 JOIN pg_class c ON c.oid = con.conrelid \
+                 JOIN pg_namespace n ON n.oid = c.relnamespace \
+                 JOIN pg_class fc ON fc.oid = con.confrelid \
+                 JOIN pg_namespace fn ON fn.oid = fc.relnamespace \
+                 WHERE con.contype = 'f' AND (n.nspname = $1 OR fn.nspname = $1) \
+                 ORDER BY 2, 3, 1",
+                &[&schema],
+            )
+            .await
+            .map_err(query_err)?;
+        Ok(rows
+            .into_iter()
+            .map(|row| ForeignKey {
+                name: Some(row.get(0)),
+                schema: row.get(1),
+                table: row.get(2),
+                columns: row.get(3),
+                ref_schema: row.get(4),
+                ref_table: row.get(5),
+                ref_columns: row.get(6),
+            })
+            .collect())
+    }
+
+    pub(crate) async fn explain(&self, statement: &str) -> Result<Plan> {
+        // The extended protocol takes exactly one statement, so nothing after
+        // it can run even if the splitter missed a `;`.
+        let row = self
+            .client
+            .query_one(&format!("EXPLAIN (FORMAT JSON) {statement}"), &[])
+            .await
+            .map_err(query_err)?;
+        let json: serde_json::Value = row.get(0);
+        let roots = json
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| entry.get("Plan"))
+            .map(pg_plan_node)
+            .collect();
+        Ok(Plan {
+            roots,
+            raw: serde_json::to_string_pretty(&json).unwrap_or_default(),
+        })
+    }
+
+    pub(crate) async fn ddl(&self, schema: &str, name: &str, kind: ObjectKind) -> Result<String> {
+        let qualified = format!("{}.{}", quote(schema), quote(name));
+        match kind {
+            ObjectKind::Table | ObjectKind::ForeignTable => self.table_ddl(schema, name).await,
+            ObjectKind::View | ObjectKind::MaterializedView => {
+                let row = self
+                    .client
+                    .query_one(
+                        "SELECT pg_get_viewdef(c.oid, true), c.relkind::text \
+                         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
+                         WHERE n.nspname = $1 AND c.relname = $2",
+                        &[&schema, &name],
+                    )
+                    .await
+                    .map_err(query_err)?;
+                let body: String = row.get(0);
+                let create = if row.get::<_, &str>(1) == "m" {
+                    "CREATE MATERIALIZED VIEW"
+                } else {
+                    "CREATE OR REPLACE VIEW"
+                };
+                Ok(format!("{create} {qualified} AS\n{}\n", body.trim_end()))
+            }
+            ObjectKind::Function | ObjectKind::Procedure => {
+                let bodies = self
+                    .strings(
+                        "SELECT pg_get_functiondef(p.oid) FROM pg_proc p \
+                         JOIN pg_namespace n ON n.oid = p.pronamespace \
+                         WHERE n.nspname = $1 AND p.proname = $2 ORDER BY p.oid",
+                        &[&schema, &name],
+                    )
+                    .await?;
+                Ok(bodies
+                    .iter()
+                    .map(|b| format!("{};\n", b.trim_end()))
+                    .collect::<Vec<_>>()
+                    .join("\n"))
+            }
+            ObjectKind::Sequence => {
+                let row = self
+                    .client
+                    .query_one(
+                        "SELECT format_type(s.seqtypid, NULL), s.seqstart, s.seqincrement, \
+                                s.seqmin, s.seqmax, s.seqcache, s.seqcycle \
+                         FROM pg_sequence s JOIN pg_class c ON c.oid = s.seqrelid \
+                         JOIN pg_namespace n ON n.oid = c.relnamespace \
+                         WHERE n.nspname = $1 AND c.relname = $2",
+                        &[&schema, &name],
+                    )
+                    .await
+                    .map_err(query_err)?;
+                Ok(format!(
+                    "CREATE SEQUENCE {qualified} AS {} START {} INCREMENT {} MINVALUE {} MAXVALUE {} CACHE {}{};\n",
+                    row.get::<_, String>(0),
+                    row.get::<_, i64>(1),
+                    row.get::<_, i64>(2),
+                    row.get::<_, i64>(3),
+                    row.get::<_, i64>(4),
+                    row.get::<_, i64>(5),
+                    if row.get::<_, bool>(6) { " CYCLE" } else { "" },
+                ))
+            }
+        }
+    }
+
+    /// `CREATE TABLE` from the catalog: columns, then constraints as the
+    /// server prints them, then the indexes no constraint owns.
+    async fn table_ddl(&self, schema: &str, name: &str) -> Result<String> {
+        let columns = self.columns(schema, name).await?;
+        if columns.is_empty() {
+            return Err(Error::query(format!("{schema}.{name} was not found")));
+        }
+        let mut lines: Vec<String> = columns
+            .iter()
+            .map(|c| {
+                let mut line = format!("    {} {}", quote(&c.name), c.db_type);
+                if let Some(default) = &c.default {
+                    line.push_str(" DEFAULT ");
+                    line.push_str(default);
+                }
+                if !c.nullable {
+                    line.push_str(" NOT NULL");
+                }
+                line
+            })
+            .collect();
+        let constraints = self
+            .client
+            .query(
+                "SELECT con.conname::text, pg_get_constraintdef(con.oid, true) \
+                 FROM pg_constraint con JOIN pg_class c ON c.oid = con.conrelid \
+                 JOIN pg_namespace n ON n.oid = c.relnamespace \
+                 WHERE n.nspname = $1 AND c.relname = $2 AND con.contype IN ('p', 'u', 'f', 'c', 'x') \
+                 ORDER BY CASE con.contype WHEN 'p' THEN 0 WHEN 'u' THEN 1 WHEN 'f' THEN 2 ELSE 3 END, 1",
+                &[&schema, &name],
+            )
+            .await
+            .map_err(query_err)?;
+        for row in constraints {
+            lines.push(format!(
+                "    CONSTRAINT {} {}",
+                quote(row.get(0)),
+                row.get::<_, &str>(1)
+            ));
+        }
+        let mut out = format!(
+            "CREATE TABLE {}.{} (\n{}\n);\n",
+            quote(schema),
+            quote(name),
+            lines.join(",\n")
+        );
+        let indexes = self
+            .strings(
+                "SELECT pg_get_indexdef(i.indexrelid) FROM pg_index i \
+                 JOIN pg_class c ON c.oid = i.indrelid JOIN pg_namespace n ON n.oid = c.relnamespace \
+                 WHERE n.nspname = $1 AND c.relname = $2 \
+                   AND NOT EXISTS (SELECT 1 FROM pg_constraint con WHERE con.conindid = i.indexrelid) \
+                 ORDER BY 1",
+                &[&schema, &name],
+            )
+            .await?;
+        for index in indexes {
+            out.push_str(&index);
+            out.push_str(";\n");
+        }
+        Ok(out)
+    }
+
     async fn strings(
         &self,
         sql: &str,
@@ -320,6 +507,74 @@ impl PgConnection {
     ) -> Result<Vec<String>> {
         let rows = self.client.query(sql, params).await.map_err(query_err)?;
         Ok(rows.into_iter().map(|row| row.get(0)).collect())
+    }
+}
+
+/// A double-quoted identifier, as Postgres reads it.
+fn quote(ident: &str) -> String {
+    format!("\"{}\"", ident.replace('"', "\"\""))
+}
+
+/// The plan keys shown in a node's label or as cost and rows, so they are not
+/// repeated in its details.
+const PLAN_SUMMARY_KEYS: &[&str] = &[
+    "Node Type",
+    "Plans",
+    "Total Cost",
+    "Plan Rows",
+    "Relation Name",
+    "Schema",
+    "Alias",
+    "Index Name",
+    "Join Type",
+    "Parent Relationship",
+];
+
+fn pg_plan_node(node: &serde_json::Value) -> PlanNode {
+    let text = |key: &str| node.get(key).and_then(serde_json::Value::as_str);
+    let mut label = text("Node Type").unwrap_or("Step").to_owned();
+    if let Some(join) = text("Join Type")
+        && !label.contains(join)
+    {
+        label = format!("{join} {label}");
+    }
+    if let Some(index) = text("Index Name") {
+        label.push_str(" using ");
+        label.push_str(index);
+    }
+    if let Some(relation) = text("Relation Name") {
+        label.push_str(" on ");
+        label.push_str(relation);
+        if let Some(alias) = text("Alias").filter(|alias| *alias != relation) {
+            label.push(' ');
+            label.push_str(alias);
+        }
+    }
+    let details = node
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(key, _)| !PLAN_SUMMARY_KEYS.contains(&key.as_str()))
+        .map(|(key, value)| PlanDetail {
+            name: key.clone(),
+            value: match value {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            },
+        })
+        .collect();
+    PlanNode {
+        label,
+        cost: node.get("Total Cost").and_then(serde_json::Value::as_f64),
+        rows: node.get("Plan Rows").and_then(serde_json::Value::as_f64),
+        details,
+        children: node
+            .get("Plans")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(pg_plan_node)
+            .collect(),
     }
 }
 
