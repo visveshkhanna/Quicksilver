@@ -6,7 +6,21 @@ mod commands;
 /// Builds and runs the app until its last window closes.
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![commands::app_info])
+        .manage(qs_service::Service::new())
+        .invoke_handler(tauri::generate_handler![
+            commands::app_info,
+            commands::connect,
+            commands::disconnect,
+            commands::run,
+            commands::cancel_run,
+            commands::fetch_page,
+            commands::result_info,
+            commands::close_result,
+            commands::list_databases,
+            commands::list_schemas,
+            commands::list_objects,
+            commands::list_columns,
+        ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|err| {
             eprintln!("Quicksilver failed to start: {err}");
