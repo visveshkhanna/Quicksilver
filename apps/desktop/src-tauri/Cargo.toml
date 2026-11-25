@@ -20,6 +20,7 @@ tauri-build.workspace = true
 [dependencies]
 qs-core.workspace = true
 qs-service.workspace = true
+qs-store.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tauri.workspace = true

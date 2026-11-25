@@ -37,16 +37,23 @@ export function disconnect(session: number): Promise<void> {
   return invoke('disconnect', { session })
 }
 
-/** Starts a script; `onEvent` receives every `RunEvent`. Resolves to the run id. */
+/** Where a run came from, for its history entry. */
+export type RunContext = { profileId: string | null; database: string | null }
+
+/**
+ * Starts a script; `onEvent` receives every `RunEvent`. Resolves to the run
+ * id. The run is added to history under `context`.
+ */
 export function run(
   session: number,
   script: string,
   rowCap: number | null,
   onEvent: (event: RunEvent) => void,
+  context: RunContext = { profileId: null, database: null },
 ): Promise<number> {
   const channel = new Channel<RunEvent>()
   channel.onmessage = onEvent
-  return invoke('run', { session, script, rowCap, onEvent: channel })
+  return invoke('run', { session, script, rowCap, ...context, onEvent: channel })
 }
 
 export function cancelRun(run: number): Promise<void> {

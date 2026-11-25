@@ -5,11 +5,15 @@
 //! the main thread: the service spawns tasks and the SQLite driver blocks a
 //! worker, and neither may happen on the thread that draws the window.
 
+use std::sync::Arc;
+
 use qs_core::{ConnectionConfig, Error};
+use qs_service::saved::HistoryRecorder;
 use qs_service::{
     AppInfo, ColumnInfo, DbObject, ExecuteOptions, ResultId, ResultInfo, RunEvent, RunId, Service,
     SessionId, SessionInfo,
 };
+use qs_store::Store;
 use tauri::State;
 use tauri::ipc::{Channel, Response};
 
@@ -44,15 +48,23 @@ pub async fn disconnect(service: State<'_, Service>, session: SessionId) -> Resu
 }
 
 /// Starts running a script and returns its id. Events arrive on `on_event`.
+/// The run is added to history, under `profile_id` and `database` when the
+/// tab has them.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     service: State<'_, Service>,
+    store: State<'_, Arc<Store>>,
     session: SessionId,
     script: String,
     row_cap: Option<u64>,
+    profile_id: Option<String>,
+    database: Option<String>,
     on_event: Channel<RunEvent>,
 ) -> Result<RunId> {
+    let history = HistoryRecorder::new(Arc::clone(&store), profile_id, database, script.clone());
     service.start_run(session, script, ExecuteOptions { row_cap }, move |event| {
+        history.observe(&event);
         if let Err(err) = on_event.send(event) {
             tracing::warn!("a run event could not be delivered: {err}");
         }
