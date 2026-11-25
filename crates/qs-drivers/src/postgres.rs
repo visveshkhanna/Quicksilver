@@ -20,7 +20,7 @@ use futures_util::StreamExt;
 use qs_core::{Column, ColumnSource, ConnectionConfig, Error, Result, SslMode, TypeTag};
 use qs_sql::{Dialect, split};
 use tokio::task::JoinHandle;
-use tokio_postgres::error::ErrorPosition;
+use tokio_postgres::error::{ErrorPosition, SqlState};
 use tokio_postgres::types::{Kind, Type};
 use tokio_postgres::{Client, NoTls, SimpleColumn, SimpleQueryMessage, SimpleQueryRow, Statement};
 use tokio_postgres_rustls::MakeRustlsConnect;
@@ -33,6 +33,10 @@ use crate::{
 /// How long to wait for in-flight rows after a cancel before giving up on
 /// draining them. The connection discards whatever is left either way.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Runs after a cancel the server may not have acted on yet, long enough for
+/// the request to arrive and end it rather than the next statement.
+const CANCEL_FENCE: &str = "SELECT pg_sleep(0.25)";
 
 /// An open PostgreSQL connection.
 pub struct PgConnection {
@@ -112,9 +116,25 @@ impl PgConnection {
         Ok(PgConnection { client, tls, task })
     }
 
-    /// Asks the server to cancel whatever this connection is running. Waits
-    /// for the server to take the request, so it cannot land on a later
-    /// statement.
+    /// Cancels the statement `stream` belongs to and reads what is left of
+    /// it.
+    ///
+    /// A cancel request goes over its own connection and the server acts on
+    /// it a little later, so when the statement had already finished the
+    /// request is still on its way and would cancel whatever runs next. A
+    /// short fence statement takes it instead.
+    async fn cancel_and_drain<S>(&self, stream: std::pin::Pin<&mut S>)
+    where
+        S: futures_util::Stream<Item = Result<SimpleQueryMessage, tokio_postgres::Error>>,
+    {
+        self.cancel_running().await;
+        if !drain(stream).await {
+            let _ =
+                tokio::time::timeout(DRAIN_TIMEOUT, self.client.simple_query(CANCEL_FENCE)).await;
+        }
+    }
+
+    /// Asks the server to cancel whatever this connection is running.
     async fn cancel_running(&self) {
         let token = self.client.cancel_token();
         let result = match &self.tls {
@@ -164,8 +184,7 @@ impl PgConnection {
                 let message = tokio::select! {
                     biased;
                     () = cancel.cancelled() => {
-                        self.cancel_running().await;
-                        drain(stream.as_mut()).await;
+                        self.cancel_and_drain(stream.as_mut()).await;
                         return Err(Error::Cancelled);
                     }
                     message = stream.next() => message,
@@ -182,8 +201,7 @@ impl PgConnection {
                             sink.row(&PgRow(&row));
                         } else {
                             capped = true;
-                            self.cancel_running().await;
-                            drain(stream.as_mut()).await;
+                            self.cancel_and_drain(stream.as_mut()).await;
                             break;
                         }
                     }
@@ -315,15 +333,23 @@ where
 }
 
 /// Reads and discards what the server still sends for a cancelled statement,
-/// up to [`DRAIN_TIMEOUT`].
-async fn drain<S>(mut stream: std::pin::Pin<&mut S>)
+/// up to [`DRAIN_TIMEOUT`]. Returns whether the server reported the cancel,
+/// which means it was used up on this statement.
+async fn drain<S>(mut stream: std::pin::Pin<&mut S>) -> bool
 where
     S: futures_util::Stream<Item = Result<SimpleQueryMessage, tokio_postgres::Error>>,
 {
-    let _ = tokio::time::timeout(DRAIN_TIMEOUT, async {
-        while stream.next().await.is_some() {}
+    tokio::time::timeout(DRAIN_TIMEOUT, async {
+        let mut cancelled = false;
+        while let Some(message) = stream.next().await {
+            if let Err(err) = message {
+                cancelled |= err.code() == Some(&SqlState::QUERY_CANCELED);
+            }
+        }
+        cancelled
     })
-    .await;
+    .await
+    .unwrap_or(false)
 }
 
 struct PgRow<'a>(&'a SimpleQueryRow);
