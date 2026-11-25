@@ -9,10 +9,13 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+percent-encoding = "2.3"
 serde.workspace = true
-
-[lints]
-workspace = true
+thiserror.workspace = true
+url = "2.5"
 
 [dev-dependencies]
 serde_json.workspace = true
+
+[lints]
+workspace = true
