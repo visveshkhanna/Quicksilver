@@ -80,16 +80,53 @@ All notable changes are recorded here. The format follows
   edited, read-write connections ask before a script that may change the
   schema, and full ones run everything.
 - The filter bar's query is built and checked in Rust too.
+- Icons for databases, schemas, tables, views, functions and sequences in the
+  navigator.
+- Typing on a cell starts editing it with what was typed.
+- Each change in the review can be taken back out with Undo; the review lists
+  new rows, which the grid does not draw, and the edit bar counts them.
 
 ### Changed
 
 - The row cap is now 100,000 per statement, up from 1,000.
 - Result pages (`QSP2`) carry each row's place in arrival order.
+- Opening a table or view (from the navigator or `Mod+P`) shows its rows at
+  once, and goes back to its tab if one is open.
+- The inspector follows the grid cursor.
+- Running, filtering, switching database or closing a tab asks before it
+  throws away unsaved row changes.
+- Switching a tab to another database puts away the old database's results.
+- Saving a connection only reconnects its open sessions when something they
+  connect with changed, not for a new name, colour or project.
+- A grid keeps its column widths, scroll and cursor across tab and view
+  switches.
 
 ### Fixed
 
 - A cancel request that arrived after a capped statement had finished no
   longer cancels the next statement.
+- Column widths fit the header's type as well as its name, and grid lines
+  stop at the last row.
+- The grid repaints when the OS switches between light and dark.
+- Primary buttons are readable in dark mode, and toolbar buttons no longer
+  wrap in a narrow window.
+- Shortcuts with Backspace, Delete, Escape, Tab or arrows show their macOS
+  symbols.
+- Saving from the review saves exactly the statements reviewed; a cell still
+  being edited is kept before the review opens.
+- A second run can no longer start in a tab while one is connecting or
+  running, and a run in a tab closed before it started is cancelled.
+- Declining a schema change keeps the previous results.
+- Editing another statement's result no longer discards the first one's
+  changes.
+- Hiding or pinning a column no longer leaves the cursor on a column that
+  moved.
+- A cell edit is kept even after its rows scroll out of the page cache.
+- An error's underline no longer comes back after the text was edited.
+- A re-run started from the grid leaves focus in the new grid.
+- The inspector no longer shows a row from another tab.
+- The connection form says what is missing (file, port, password command)
+  instead of saving an incomplete connection.
 
 ## [0.0.1] - 2026-11-25
 
