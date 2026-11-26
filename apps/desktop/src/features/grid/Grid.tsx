@@ -21,6 +21,7 @@ import {
   setCell,
   sortResult,
   toggleDeleteRows,
+  togglePanel,
   useApp,
 } from '../../state/app'
 import { remember, remembered } from './memory'
@@ -466,6 +467,11 @@ export function Grid({ tabId, result, insertTable }: Props) {
       .catch((err) => say(`Could not copy: ${errorText(err)}`, true))
   }
 
+  /** Shows the cursor's row, opening the inspector if it is hidden. */
+  const showInInspector = () => {
+    if (!useApp.getState().panels.inspector) togglePanel('inspector')
+    inspect()
+  }
   const inspect = (sel = selection) => {
     if (!sel) return
     const stored = cache.row(sel.focus.row)
@@ -573,7 +579,7 @@ export function Grid({ tabId, result, insertTable }: Props) {
       if (found.id === 'copy-cells') copy({ kind: 'tsv', header: false })
       if (found.id === 'copy-cells-with-header') copy({ kind: 'tsv', header: true })
       if (found.id === 'select-all-cells') setSelection(selectAll(rowCount, colCount))
-      if (found.id === 'inspect-row') inspect()
+      if (found.id === 'inspect-row') showInInspector()
       if (found.id === 'edit-cell') startEditing()
       if (found.id === 'set-null') setNull()
       if (found.id === 'delete-rows') deleteRows()
@@ -849,7 +855,7 @@ export function Grid({ tabId, result, insertTable }: Props) {
               Add a row…
             </MenuItem>
             <MenuSeparator />
-            <MenuItem onSelect={() => inspect()} keys={keys('inspect-row')}>
+            <MenuItem onSelect={showInInspector} keys={keys('inspect-row')}>
               Show row in the inspector
             </MenuItem>
             <MenuItem

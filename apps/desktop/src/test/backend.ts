@@ -3,7 +3,14 @@
 // commands the flows use, and records every call.
 
 import { mockIPC } from '@tauri-apps/api/mocks'
-import type { CatalogEntry, Profile, ProfileFields } from '../ipc/store'
+import type {
+  CatalogEntry,
+  DbeaverCandidate,
+  DbeaverImport,
+  DbeaverScan,
+  Profile,
+  ProfileFields,
+} from '../ipc/store'
 import type { Column, RunEvent } from '../ipc/types'
 
 /** Encodes rows as the Rust side's binary page (see `src/ipc/page.ts`). */
@@ -117,13 +124,15 @@ export function fakeBackend({
   mockIPC((cmd, payload) => {
     const args = (payload ?? {}) as Record<string, unknown>
     calls.push({ cmd, args })
+    const dbeaver = fakeDbeaver(cmd, args, profiles, () => `imported-${nextId++}`)
+    if (dbeaver.handled) return dbeaver.value
     switch (cmd) {
       case 'app_info':
         return { name: 'Quicksilver', version: '0.0.0-test', engines: [] }
       case 'list_profiles':
-        return profiles
+        return [...profiles]
       case 'catalog':
-        return catalog
+        return [...catalog]
       case 'buffers':
         return [...buffers.values()]
       case 'store_notices':
@@ -160,6 +169,47 @@ export function fakeBackend({
         const p = profiles.find((x) => x.id === args.id)
         return { ...p, ...(args.fields as object) }
       }
+      case 'index_database': {
+        // Every database has one table named after it, so a search can tell them apart.
+        const { profileId, database } = args as { profileId: string; database: string }
+        const name = `${database}_events`
+        if (!catalog.some((e) => e.profileId === profileId && e.database === database && e.name === name)) {
+          catalog.push(objectEntry(profileId, database, 'public', name))
+        }
+        return null
+      }
+      case 'parse_url': {
+        // Enough of Rust's reader for the form's flows: server URLs, optionally JDBC ones.
+        const text = String(args.url)
+          .trim()
+          .replace(/^jdbc:/i, '')
+        let url: URL
+        try {
+          url = new URL(text.replace(/^postgres(ql)?:/i, 'http:'))
+        } catch {
+          throw { kind: 'config', message: 'not a connection URL: relative URL without a base' }
+        }
+        if (!/^postgres(ql)?:/i.test(text))
+          throw { kind: 'config', message: 'no engine uses that URL scheme' }
+        const user = decodeURIComponent(url.username) || url.searchParams.get('user')
+        const password =
+          url.password !== '' ? decodeURIComponent(url.password) : url.searchParams.get('password')
+        const database = decodeURIComponent(url.pathname.slice(1)) || null
+        return {
+          fields: {
+            ...profile('', database ?? url.hostname),
+            host: url.hostname,
+            port: url.port ? Number(url.port) : null,
+            user,
+            database,
+            sslMode: (url.searchParams.get('sslmode') ?? 'prefer') as ProfileFields['sslMode'],
+            auth: { kind: 'keychain' },
+          },
+          password,
+        }
+      }
+      case 'plugin:dialog|open':
+        return '/Users/me/data/app.sqlite'
       case 'list_databases':
         return ['quicksilver_dev', 'analytics', 'staging']
       case 'list_schemas':
@@ -337,5 +387,102 @@ export function fakeBackend({
     calls,
     results,
     called: (cmd: string) => calls.filter((c) => c.cmd === cmd),
+  }
+}
+
+// --- DBeaver import (`dbeaver_scan`, `dbeaver_import`) ---------------------
+
+/** What the fake `dbeaver_scan` finds: two importable connections and one that is not. */
+export const DBEAVER_CANDIDATES: DbeaverCandidate[] = [
+  {
+    key: 'General/pg-orders',
+    name: 'Orders',
+    project: 'Work/Client A',
+    engine: 'postgres',
+    summary: 'alice@db.example.com:5432/orders',
+    hasPassword: true,
+    alreadyImported: false,
+    skipped: null,
+  },
+  {
+    key: 'General/lite',
+    name: 'Local',
+    project: null,
+    engine: 'sqlite',
+    summary: '/tmp/local.db',
+    hasPassword: false,
+    alreadyImported: false,
+    skipped: null,
+  },
+  {
+    key: 'General/es',
+    name: 'Search',
+    project: null,
+    engine: null,
+    summary: 'elasticsearch (elastic_search_jdbc)',
+    hasPassword: false,
+    alreadyImported: false,
+    skipped: 'elasticsearch connections are not supported',
+  },
+]
+
+const DBEAVER_FIELDS: Record<string, Partial<ProfileFields>> = {
+  'General/pg-orders': {
+    project: 'Work/Client A',
+    host: 'db.example.com',
+    port: 5432,
+    user: 'alice',
+    database: 'orders',
+  },
+  'General/lite': {
+    engine: 'sqlite',
+    host: null,
+    port: null,
+    user: null,
+    database: null,
+    path: '/tmp/local.db',
+    auth: { kind: 'none' },
+  },
+}
+
+/** Answers the DBeaver commands; imported profiles are added to `profiles`. */
+function fakeDbeaver(
+  cmd: string,
+  args: Record<string, unknown>,
+  profiles: Profile[],
+  newId: () => string,
+): { handled: boolean; value?: unknown } {
+  const imported = (c: DbeaverCandidate) => profiles.some((p) => p.name === c.name)
+  switch (cmd) {
+    case 'dbeaver_scan':
+      return {
+        handled: true,
+        value: {
+          found: true,
+          workspaces: ['/Users/test/Library/DBeaverData/workspace6'],
+          candidates: DBEAVER_CANDIDATES.map((c) => ({ ...c, alreadyImported: imported(c) })),
+          notes: [
+            'Orders uses an SSH tunnel, which Quicksilver cannot import yet; it is imported without it',
+          ],
+        } satisfies DbeaverScan,
+      }
+    case 'dbeaver_import': {
+      const result: DbeaverImport = { imported: [], skipped: [] }
+      for (const key of args.keys as string[]) {
+        const c = DBEAVER_CANDIDATES.find((x) => x.key === key)
+        if (!c) result.skipped.push({ name: key, reason: "it is no longer in DBeaver's files" })
+        else if (c.skipped) result.skipped.push({ name: c.name, reason: c.skipped })
+        else if (imported(c))
+          result.skipped.push({ name: c.name, reason: 'a saved connection already points there' })
+        else {
+          const p = profile(newId(), c.name, DBEAVER_FIELDS[key])
+          profiles.push(p)
+          result.imported.push(p)
+        }
+      }
+      return { handled: true, value: result }
+    }
+    default:
+      return { handled: false }
   }
 }

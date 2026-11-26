@@ -1,7 +1,7 @@
 // The three palettes: switch database (Mod+K), go to object (Mod+P) and the
 // command palette (Mod+Shift+P).
 
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { COMMANDS } from '../../app/commands'
 import { KeyCaps } from '../../app/Kbd'
 import { ColorDot } from '../../app/ui'
@@ -10,11 +10,14 @@ import { type Target, targetKey } from '../../lib/target'
 import {
   activeTab,
   closeDialog,
+  indexProfile,
+  isConnected,
   newTab,
   nodeKey,
   openTable,
   profileById,
   retarget,
+  reveal,
   type State,
   select,
   useApp,
@@ -80,6 +83,11 @@ export function DatabaseSwitcher() {
         if (!target) return
         if (alternative) newTab({ profileId: target.profileId, database: target.database })
         else retarget({ profileId: target.profileId, database: target.database })
+        void reveal(
+          target.database
+            ? { kind: 'database', profileId: target.profileId, database: target.database }
+            : { kind: 'connection', profileId: target.profileId },
+        )
       }}
       footer={
         <>
@@ -92,84 +100,105 @@ export function DatabaseSwitcher() {
 
 const OPENABLE = new Set(['table', 'view', 'materializedView', 'foreignTable'])
 
+type Found = { profileId: string; database: string; schema: string; name: string; kind: string }
+
+/** Every table, view and routine known for any connection: the front tab's connection and database first. */
+function knownObjects(state: State, profileId: string | null, database: string | null): Found[] {
+  const seen = new Map<string, Found>()
+  const add = (o: Found) => seen.set(`${o.profileId}\u0000${o.database}\u0000${o.schema}\u0000${o.name}`, o)
+  const names = new Set(state.profiles.map((p) => p.id))
+  for (const e of state.catalog) {
+    if (names.has(e.profileId) && e.schema && e.name) {
+      add({ profileId: e.profileId, database: e.database, schema: e.schema, name: e.name, kind: e.kind })
+    }
+  }
+  // Objects loaded in the navigator since the cache was written.
+  for (const [key, loaded] of Object.entries(state.tree)) {
+    const m = /^c:([^/]+)\/d:([^/]+)\/s:([^/]+)$/.exec(key)
+    if (!m || loaded.status !== 'ready') continue
+    for (const o of loaded.objects ?? []) {
+      add({ profileId: m[1] ?? '', database: m[2] ?? '', schema: m[3] ?? '', name: o.name, kind: o.kind })
+    }
+  }
+  const rank = (o: Found) => (o.profileId === profileId ? (o.database === database ? 0 : 1) : 2)
+  return [...seen.values()].sort(
+    (a, b) =>
+      rank(a) - rank(b) ||
+      a.profileId.localeCompare(b.profileId) ||
+      a.database.localeCompare(b.database) ||
+      a.schema.localeCompare(b.schema) ||
+      a.name.localeCompare(b.name),
+  )
+}
+
 export function GoToObject() {
   const state = useApp()
   const front = activeTab(state)
   const profile = profileById(front?.profileId ?? null)
-  const objects = useMemo(() => {
-    if (!profile) return []
-    const seen = new Map<string, { database: string; schema: string; name: string; kind: string }>()
-    for (const e of state.catalog) {
-      if (e.profileId === profile.id && e.schema && e.name) {
-        seen.set(`${e.database}.${e.schema}.${e.name}`, {
-          database: e.database,
-          schema: e.schema,
-          name: e.name,
-          kind: e.kind,
-        })
-      }
-    }
-    // Objects loaded in the navigator since the cache was written.
-    for (const [key, loaded] of Object.entries(state.tree)) {
-      const m = /^c:([^/]+)\/d:([^/]+)\/s:([^/]+)$/.exec(key)
-      if (!m || m[1] !== profile.id || loaded.status !== 'ready') continue
-      for (const o of loaded.objects ?? []) {
-        seen.set(`${m[2]}.${m[3]}.${o.name}`, {
-          database: m[2] ?? '',
-          schema: m[3] ?? '',
-          name: o.name,
-          kind: o.kind,
-        })
-      }
-    }
-    // The tab's own database first.
-    return [...seen.values()].sort(
-      (a, b) =>
-        Number(b.database === front?.database) - Number(a.database === front?.database) ||
-        a.schema.localeCompare(b.schema) ||
-        a.name.localeCompare(b.name),
-    )
-  }, [state.catalog, state.tree, profile, front?.database])
+  const several = state.profiles.length > 1
 
+  // Read every database's tables in the background: the front tab's
+  // connection, and any other that is connected.
+  useEffect(() => {
+    const { profiles } = useApp.getState()
+    for (const p of profiles) {
+      if (p.id === profile?.id || isConnected(p.id)) void indexProfile(p.id)
+    }
+  }, [profile?.id])
+
+  const objects = useMemo(
+    () => knownObjects(state, profile?.id ?? null, front?.database ?? null),
+    [state, profile?.id, front?.database],
+  )
+  const id = (o: Found) => `${o.profileId}\u0000${o.database}\u0000${o.schema}\u0000${o.name}`
   const items: PickItem[] = objects.map((o) => ({
-    id: `${o.database}\u0000${o.schema}\u0000${o.name}`,
+    id: id(o),
     label: `${o.schema}.${o.name}`,
-    detail: `${o.database} · ${o.kind}`,
+    detail: `${several ? `${profileById(o.profileId)?.name ?? ''} / ` : ''}${o.database} · ${o.kind}`,
   }))
+  const reading = Object.values(state.indexing)
+  const done = reading.reduce((n, r) => n + r.done, 0)
+  const total = reading.reduce((n, r) => n + r.total, 0)
 
   return (
     <QuickPick
       title="Go to object"
-      placeholder={profile ? `Table, view or function in ${profile.name}…` : 'Pick a database first'}
+      placeholder="Table, view or function in any database…"
       items={items}
       empty={
-        profile
-          ? 'Nothing matches. Objects appear here after the connection has been opened once.'
-          : 'No connection.'
+        reading.length > 0
+          ? 'Reading the databases…'
+          : profile || state.catalog.length > 0
+            ? 'Nothing matches.'
+            : 'Connect to a database first.'
       }
       onClose={closeDialog}
       onPick={(item) => {
         closeDialog()
-        const o = objects.find((x) => `${x.database}\u0000${x.schema}\u0000${x.name}` === item.id)
-        if (!o || !profile) return
+        const o = objects.find((x) => id(x) === item.id)
+        if (!o) return
+        const node = {
+          kind: 'object' as const,
+          profileId: o.profileId,
+          database: o.database,
+          schema: o.schema,
+          object: { name: o.name, kind: o.kind as never },
+        }
+        void reveal(node)
         if (OPENABLE.has(o.kind)) {
-          void openTable({ profileId: profile.id, database: o.database }, o.schema, o.name)
+          void openTable({ profileId: o.profileId, database: o.database }, o.schema, o.name)
         } else {
-          select({
-            kind: 'node',
-            node: {
-              kind: 'object',
-              profileId: profile.id,
-              database: o.database,
-              schema: o.schema,
-              object: { name: o.name, kind: o.kind as never },
-            },
-          })
+          select({ kind: 'node', node })
         }
       }}
       footer={
         <>
-          <KeyCaps keys="Enter" /> open a query on it in a new tab
+          <KeyCaps keys="Enter" /> open it and show it in the navigator
+          {reading.length > 0 && (
+            <span className="ml-auto" role="status">
+              Reading tables: {done} of {total} databases…
+            </span>
+          )}
         </>
       }
     />

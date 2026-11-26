@@ -4,6 +4,8 @@
 import { invoke } from '@tauri-apps/api/core'
 import type { Buffer } from './generated/Buffer'
 import type { CatalogEntry } from './generated/CatalogEntry'
+import type { DbeaverImport } from './generated/DbeaverImport'
+import type { DbeaverScan } from './generated/DbeaverScan'
 import type { HistoryEntry } from './generated/HistoryEntry'
 import type { HistoryQuery } from './generated/HistoryQuery'
 import type { Notice } from './generated/Notice'
@@ -18,6 +20,10 @@ export type { Auth } from './generated/Auth'
 export type { Buffer } from './generated/Buffer'
 export type { CatalogEntry } from './generated/CatalogEntry'
 export type { Color } from './generated/Color'
+export type { DbeaverCandidate } from './generated/DbeaverCandidate'
+export type { DbeaverImport } from './generated/DbeaverImport'
+export type { DbeaverScan } from './generated/DbeaverScan'
+export type { DbeaverSkipped } from './generated/DbeaverSkipped'
 export type { HistoryEntry } from './generated/HistoryEntry'
 export type { HistoryQuery } from './generated/HistoryQuery'
 export type { Mode } from './generated/Mode'
@@ -66,8 +72,23 @@ export const testConnection = (
 
 export const parseUrl = (url: string): Promise<ParsedUrl> => invoke('parse_url', { url })
 
+/** The connections saved in DBeaver on this machine. Never includes a password. */
+export const dbeaverScan = (): Promise<DbeaverScan> => invoke('dbeaver_scan')
+
+/**
+ * Imports the DBeaver connections with these candidate `key`s. With
+ * `passwords`, their DBeaver passwords go to the keychain (read again in
+ * Rust; they never reach the UI); otherwise they ask on connect.
+ */
+export const dbeaverImport = (keys: string[], passwords: boolean): Promise<DbeaverImport> =>
+  invoke('dbeaver_import', { keys, passwords })
+
 export const refreshCatalog = (session: number, profileId: string, database: string | null): Promise<void> =>
   invoke('refresh_catalog', { session, profileId, database })
+
+/** Reads one database's schemas and objects into the catalog cache. */
+export const indexDatabase = (session: number, profileId: string, database: string): Promise<void> =>
+  invoke('index_database', { session, profileId, database })
 
 export const catalog = (profileId: string | null = null): Promise<CatalogEntry[]> =>
   invoke('catalog', { profileId })

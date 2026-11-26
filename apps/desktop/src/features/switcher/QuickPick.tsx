@@ -123,7 +123,11 @@ export function QuickPick({
           )
         })}
       </div>
-      {footer && <div className="border-t border-border px-4 py-2 text-[11px] text-muted">{footer}</div>}
+      {footer && (
+        <div className="flex items-center gap-1 border-t border-border px-4 py-2 text-[11px] text-muted">
+          {footer}
+        </div>
+      )}
     </Modal>
   )
 }

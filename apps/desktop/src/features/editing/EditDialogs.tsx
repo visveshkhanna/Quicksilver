@@ -197,3 +197,57 @@ export function Confirm() {
     </Modal>
   )
 }
+
+/** Asks for one line of text, such as a folder's name. */
+export function Prompt() {
+  const dialog = useApp((s) => (s.dialog?.kind === 'prompt' ? s.dialog : null))
+  const [value, setValue] = useState(dialog?.initial ?? '')
+  const [problem, setProblem] = useState<string | null>(null)
+  if (!dialog) return null
+  const submit = () => {
+    const why = dialog.check(value)
+    if (why !== null) {
+      setProblem(why)
+      return
+    }
+    closeDialog()
+    dialog.run(value.trim())
+  }
+  return (
+    <Modal title={dialog.title} onClose={closeDialog} width={420}>
+      <form
+        className="flex flex-col gap-3 p-4"
+        onSubmit={(e) => {
+          e.preventDefault()
+          submit()
+        }}
+      >
+        <label className="flex flex-col gap-1.5">
+          <span className="text-muted">{dialog.label}</span>
+          <input
+            data-autofocus
+            value={value}
+            onChange={(e) => {
+              setValue(e.target.value)
+              setProblem(null)
+            }}
+            onFocus={(e) => e.currentTarget.select()}
+            aria-invalid={problem !== null}
+            className="rounded border border-border bg-bg px-2 py-1 outline-none focus:border-accent aria-invalid:border-[#e5484d]"
+          />
+        </label>
+        {problem && (
+          <p role="alert" className="m-0 text-[12px] text-[#e5484d]">
+            {problem}
+          </p>
+        )}
+        <div className="flex justify-end gap-2">
+          <Button onClick={closeDialog}>Cancel</Button>
+          <Button kind="primary" type="submit">
+            {dialog.confirmLabel}
+          </Button>
+        </div>
+      </form>
+    </Modal>
+  )
+}

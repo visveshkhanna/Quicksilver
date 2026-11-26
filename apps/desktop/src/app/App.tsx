@@ -1,7 +1,8 @@
 import { Group, Panel, Separator, useDefaultLayout } from 'react-resizable-panels'
 import { ConnectionForm } from '../features/connections/ConnectionForm'
+import { ImportDbeaver } from '../features/connections/ImportDbeaver'
 import { PasswordPrompt } from '../features/connections/PasswordPrompt'
-import { Confirm, ConfirmRun, InsertRow, ReviewChanges } from '../features/editing/EditDialogs'
+import { Confirm, ConfirmRun, InsertRow, Prompt, ReviewChanges } from '../features/editing/EditDialogs'
 import { Inspector } from '../features/inspector/Inspector'
 import { Navigator } from '../features/navigator/Navigator'
 import { Shortcuts } from '../features/settings/Shortcuts'
@@ -60,11 +61,13 @@ export function App() {
       {dialog?.kind === 'palette' && <CommandPalette />}
       {dialog?.kind === 'shortcuts' && <Shortcuts />}
       {dialog?.kind === 'connection' && (
-        <ConnectionForm profileId={dialog.profileId} pasteUrl={dialog.pasteUrl} />
+        <ConnectionForm profileId={dialog.profileId} pasteUrl={dialog.pasteUrl} project={dialog.project} />
       )}
       {dialog?.kind === 'review' && <ReviewChanges />}
       {dialog?.kind === 'confirmRun' && <ConfirmRun />}
       {dialog?.kind === 'confirm' && <Confirm />}
+      {dialog?.kind === 'prompt' && <Prompt />}
+      {dialog?.kind === 'importDbeaver' && <ImportDbeaver />}
       {dialog?.kind === 'insertRow' && <InsertRow />}
       <PasswordPrompt />
     </div>

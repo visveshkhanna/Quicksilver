@@ -1,13 +1,26 @@
 import { useEffect } from 'react'
-import { loadNode, type NodeRef, nodeKey, profileById, useApp } from '../../state/app'
+import { Icon } from '../../app/icons'
+import { shortcutLabel } from '../../app/Kbd'
+import { keysFor } from '../../keymap/keymap'
+import { loadNode, type NodeRef, nodeKey, profileById, togglePanel, useApp } from '../../state/app'
 
 /** The right panel: the selected row in full, or the selected object's details. */
 export function Inspector() {
   const selection = useApp((s) => s.selection)
+  const keys = useApp((s) => shortcutLabel(keysFor('toggle-inspector', s.overrides)))
   return (
     <aside className="flex h-full flex-col bg-panel" aria-label="Inspector">
-      <div className="border-b border-border px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted">
+      <div className="flex items-center border-b border-border py-1.5 pr-1.5 pl-3 text-[11px] font-semibold uppercase tracking-wide text-muted">
         Inspector
+        <button
+          type="button"
+          aria-label="Hide the inspector"
+          title={keys ? `Hide the inspector (${keys})` : 'Hide the inspector'}
+          onClick={() => togglePanel('inspector')}
+          className="ml-auto rounded p-0.5 hover:bg-raised hover:text-fg"
+        >
+          <Icon name="close" className="size-3" />
+        </button>
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
         {!selection && <p className="p-3 text-muted">Select a row or an object to see it here.</p>}

@@ -3,7 +3,19 @@
 
 import type { ReactNode } from 'react'
 
-export type IconName = 'database' | 'schema' | 'table' | 'view' | 'function' | 'sequence' | 'column' | 'key'
+export type IconName =
+  | 'database'
+  | 'schema'
+  | 'table'
+  | 'view'
+  | 'function'
+  | 'sequence'
+  | 'column'
+  | 'key'
+  | 'folder'
+  | 'sidebarLeft'
+  | 'sidebarRight'
+  | 'close'
 
 const PATHS: Record<IconName, ReactNode> = {
   database: (
@@ -35,6 +47,20 @@ const PATHS: Record<IconName, ReactNode> = {
       <path d="M7.5 8h7M12.5 8v2.5M10.5 8v1.5" />
     </>
   ),
+  folder: <path d="M1.5 3.5h4.5l1.5 1.5h7v8h-13z" />,
+  sidebarLeft: (
+    <>
+      <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+      <path d="M6 2.5v11" />
+    </>
+  ),
+  sidebarRight: (
+    <>
+      <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+      <path d="M10 2.5v11" />
+    </>
+  ),
+  close: <path d="M4 4l8 8M12 4l-8 8" />,
 }
 
 /** A 14px icon for `name`, hidden from screen readers (the label says what it is). */

@@ -18,3 +18,8 @@ export function KeyCaps({ keys }: { keys: string }) {
     </kbd>
   )
 }
+
+/** Keys such as `Mod+K` as plain text for a tooltip, or `''` when unbound. */
+export function shortcutLabel(keys: string): string {
+  return keys === '' ? '' : formatKeys(keys, platform)
+}

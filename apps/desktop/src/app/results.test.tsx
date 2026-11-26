@@ -259,8 +259,10 @@ describe('navigator', () => {
     const { user, backend } = await start()
     const tree = screen.getByRole('tree', { name: 'Connections' })
     const node = (name: string) => within(tree).findByText(name, { selector: '[role=treeitem] *' })
-    await user.click(await node('prod-pg'))
-    await user.click(await node('quicksilver_dev'))
+    // Picking the database with Mod+K showed it in the navigator, opened.
+    await waitFor(() =>
+      expect(tree.querySelector('[aria-selected="true"]')?.textContent).toContain('quicksilver_dev'),
+    )
     await user.click(await node('sales'))
     await user.click(await node('Tables'))
     fireEvent.contextMenu(await node('orders'))

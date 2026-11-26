@@ -4,6 +4,7 @@
 import { create } from 'zustand'
 import { forgetEditor, selectionIn } from '../features/editor/registry'
 import { forgetGrids } from '../features/grid/memory'
+import { moved, normalPath, parentOf, within } from '../features/navigator/projects'
 import * as ipc from '../ipc/commands'
 import type { CatalogEntry, Notice, Profile, ProfileFields } from '../ipc/store'
 import * as saved from '../ipc/store'
@@ -111,7 +112,7 @@ export type Dialog =
   | { kind: 'goto' }
   | { kind: 'palette' }
   | { kind: 'shortcuts' }
-  | { kind: 'connection'; profileId: string | null; pasteUrl?: boolean }
+  | { kind: 'connection'; profileId: string | null; pasteUrl?: boolean; project?: string | null }
   | { kind: 'confirmRun'; message: string; statements: string[]; run: () => void }
   | {
       kind: 'review'
@@ -130,6 +131,17 @@ export type Dialog =
       run: () => void
     }
   | { kind: 'insertRow'; tabId: string }
+  | {
+      kind: 'prompt'
+      title: string
+      label: string
+      initial: string
+      confirmLabel: string
+      /** Why `value` will not do, or `null` to accept it. */
+      check: (value: string) => string | null
+      run: (value: string) => void
+    }
+  | { kind: 'importDbeaver' }
 
 export type PasswordRequest = {
   profile: Profile
@@ -182,7 +194,15 @@ export type State = {
   panels: { navigator: boolean; inspector: boolean }
   tree: Record<string, Loaded>
   expanded: Record<string, boolean>
+  /** Project folders kept even while empty, as `/`-joined paths. */
+  folders: string[]
+  /** Project folders the user closed. */
+  collapsedFolders: string[]
+  /** The navigator row last picked or revealed, by `nodeKey`. */
+  current: string | null
   filter: string
+  /** Databases read into the catalog so far, per connection being indexed. */
+  indexing: Record<string, { done: number; total: number }>
 }
 
 const initial: State = {
@@ -203,7 +223,11 @@ const initial: State = {
   panels: { navigator: true, inspector: true },
   tree: {},
   expanded: {},
+  folders: [],
+  collapsedFolders: [],
+  current: null,
   filter: '',
+  indexing: {},
 }
 
 export const useApp = create<State>(() => initial)
@@ -218,6 +242,7 @@ export function resetApp() {
   starting.clear()
   runTokens.clear()
   refocusGrid.clear()
+  indexed.clear()
   forgetGrids()
 }
 
@@ -225,15 +250,18 @@ export function resetApp() {
 
 /** Loads everything saved, then marks the app ready. */
 export async function boot() {
-  const [profiles, catalog, buffers, recent, overrides, panels, notices] = await Promise.all([
-    saved.listProfiles(),
-    saved.catalog(),
-    saved.buffers(),
-    saved.getLayout<string[]>('recentTargets'),
-    saved.getLayout<Overrides>('keymap'),
-    saved.getLayout<State['panels']>('panelVisibility'),
-    saved.storeNotices(),
-  ])
+  const [profiles, catalog, buffers, recent, overrides, panels, notices, folders, collapsedFolders] =
+    await Promise.all([
+      saved.listProfiles(),
+      saved.catalog(),
+      saved.buffers(),
+      saved.getLayout<string[]>('recentTargets'),
+      saved.getLayout<Overrides>('keymap'),
+      saved.getLayout<State['panels']>('panelVisibility'),
+      saved.storeNotices(),
+      saved.getLayout<string[]>('projectFolders'),
+      saved.getLayout<string[]>('collapsedFolders'),
+    ])
   const tabs: Tab[] = buffers.map((b) => ({
     ...blankTab,
     id: b.id,
@@ -253,6 +281,8 @@ export async function boot() {
     overrides: overrides ?? {},
     panels: panels ?? initial.panels,
     notices,
+    folders: folders ?? [],
+    collapsedFolders: collapsedFolders ?? [],
   })
 }
 
@@ -316,6 +346,95 @@ export async function saveProfile(
   if (before && (password.kind !== 'keep' || connectionChanged(before, profile)))
     await disconnectProfile(before.id)
   return profile
+}
+
+/**
+ * Imports the chosen DBeaver connections (by candidate key), with their
+ * saved passwords going straight to the keychain when `passwords`.
+ */
+export async function importDbeaver(keys: string[], passwords: boolean) {
+  const result = await saved.dbeaverImport(keys, passwords)
+  set((s) => ({ profiles: [...s.profiles, ...result.imported] }))
+  const n = result.imported.length
+  say(
+    `Imported ${n} connection${n === 1 ? '' : 's'} from DBeaver` +
+      (result.skipped.length > 0 ? `; ${result.skipped.length} could not be.` : '.'),
+    result.skipped.length > 0 && n === 0,
+  )
+  return result
+}
+
+// --- Project folders ------------------------------------------------------------
+
+function saveFolders(folders: string[]) {
+  const unique = [...new Set(folders)].sort()
+  set({ folders: unique })
+  void saved.setLayout('projectFolders', unique).catch(() => {})
+}
+
+/** Moves a connection into the folder at `project` (`null` for the top level). */
+export async function moveProfile(id: string, project: string | null) {
+  const profile = profileById(id)
+  const to = normalPath(project)
+  if (!profile || (profile.project ?? null) === to) return
+  const { id: _, createdMs, updatedMs, ...fields } = profile
+  try {
+    await saveProfile(id, { ...fields, project: to }, { kind: 'keep' })
+  } catch (err) {
+    say(`Could not move ${profile.name}: ${errorText(err)}`, true)
+  }
+}
+
+/** Adds an empty folder named `name` inside `parent`. */
+export function createFolder(parent: string | null, name: string) {
+  const path = normalPath(`${parent ?? ''}/${name}`)
+  if (!path) return
+  saveFolders([...get().folders, path])
+  setFolderOpen(path, true)
+  if (parent) setFolderOpen(parent, true)
+}
+
+/**
+ * Moves the folder at `from` (with everything in it) to `to`: a rename when
+ * only the last name differs. Refuses to move a folder into itself.
+ */
+export async function moveFolder(from: string, to: string | null) {
+  if (to !== null && within(to, from)) {
+    say('A folder cannot be moved into itself.', true)
+    return
+  }
+  const target = (path: string) => moved(path, from, to)
+  saveFolders(
+    get()
+      .folders.flatMap((f) => (within(f, from) ? [target(f) ?? ''] : [f]))
+      .filter(Boolean),
+  )
+  set((s) => ({
+    collapsedFolders: s.collapsedFolders.flatMap((f) => (within(f, from) ? [] : [f])),
+  }))
+  for (const p of get().profiles) {
+    if (within(p.project ?? null, from)) await moveProfile(p.id, target(p.project ?? ''))
+  }
+}
+
+/** Removes a folder; what was in it moves up to its parent. */
+export async function deleteFolder(path: string) {
+  const parent = parentOf(path)
+  saveFolders(
+    get()
+      .folders.flatMap((f) => (f === path ? [] : within(f, path) ? [moved(f, path, parent) ?? ''] : [f]))
+      .filter(Boolean),
+  )
+  for (const p of get().profiles) {
+    if (within(p.project ?? null, path)) await moveProfile(p.id, moved(p.project ?? '', path, parent))
+  }
+}
+
+export function setFolderOpen(path: string, open: boolean) {
+  const rest = get().collapsedFolders.filter((f) => f !== path)
+  const collapsedFolders = open ? rest : [...rest, path]
+  set({ collapsedFolders })
+  void saved.setLayout('collapsedFolders', collapsedFolders).catch(() => {})
 }
 
 function connectionChanged(a: Profile, b: Profile): boolean {
@@ -401,6 +520,56 @@ export async function disconnectProfile(profileId: string) {
 export function isConnected(profileId: string): boolean {
   const prefix = `${profileId}\u0000`
   return Object.keys(get().sessions).some((k) => k.startsWith(prefix))
+}
+
+/** When each connection's databases were last read into the catalog, this run. */
+const indexed = new Map<string, number>()
+/** How long an index is trusted before a search reads the databases again. */
+const INDEX_FRESH_MS = 10 * 60_000
+
+/**
+ * Reads the tables of every database on a connection into the catalog, so
+ * `Mod+P` and the navigator filter find them without each database being
+ * opened first. Runs in the background a few databases at a time, each over
+ * a connection that is closed once read; results show up as they arrive.
+ * Does nothing when it ran recently, unless `force`.
+ */
+export async function indexProfile(profileId: string, force = false) {
+  const last = indexed.get(profileId)
+  if (get().indexing[profileId] || (!force && last !== undefined && Date.now() - last < INDEX_FRESH_MS))
+    return
+  indexed.set(profileId, Date.now())
+  const progress = (done: number, total: number) =>
+    set((s) => ({ indexing: { ...s.indexing, [profileId]: { done, total } } }))
+  progress(0, 1)
+  try {
+    const open = Object.entries(get().sessions).find(([k]) => k.startsWith(`${profileId}\u0000`))?.[1]
+    const session = open ?? (await ensureSession(profileId, null))
+    const listed = await ipc.listDatabases(session.id)
+    const databases = listed.length > 0 ? listed : session.database ? [session.database] : []
+    // The connected database first: its tables are the likeliest wanted.
+    databases.sort((a, b) => Number(b === session.database) - Number(a === session.database))
+    let done = 0
+    progress(done, databases.length)
+    const queue = [...databases]
+    const worker = async () => {
+      for (let database = queue.shift(); database !== undefined; database = queue.shift()) {
+        // A database this user may not open is skipped; the rest still index.
+        await saved.indexDatabase(session.id, profileId, database).catch(() => {})
+        progress(++done, databases.length)
+        await reloadCatalog()
+      }
+    }
+    await Promise.all([worker(), worker(), worker()])
+  } catch {
+    // Not connected (or the password prompt was dismissed): try again next time.
+    indexed.delete(profileId)
+  } finally {
+    set((s) => {
+      const { [profileId]: _, ...rest } = s.indexing
+      return { indexing: rest }
+    })
+  }
 }
 
 export async function reloadCatalog() {
@@ -1216,7 +1385,11 @@ export async function loadNode(node: NodeRef, force = false) {
   try {
     switch (node.kind) {
       case 'connection': {
-        const session = await ensureSession(node.profileId, null)
+        // Any open session on the connection can list its databases.
+        const open = Object.entries(get().sessions).find(([k]) =>
+          k.startsWith(`${node.profileId}\u0000`),
+        )?.[1]
+        const session = open ?? (await ensureSession(node.profileId, null))
         const listed = await ipc.listDatabases(session.id)
         const databases = listed.length > 0 ? listed : session.database ? [session.database] : []
         setLoaded(key, { status: 'ready', databases })
@@ -1254,6 +1427,8 @@ export function toggleNode(node: NodeRef) {
 /** Reloads `node` and forgets what was loaded beneath it. */
 export function refreshNode(node: NodeRef) {
   const key = nodeKey(node)
+  // The next search reads the connection's databases again.
+  if (node.kind === 'connection') indexed.delete(node.profileId)
   set((s) => ({
     tree: Object.fromEntries(Object.entries(s.tree).filter(([k]) => !k.startsWith(`${key}/`))),
   }))
@@ -1261,7 +1436,68 @@ export function refreshNode(node: NodeRef) {
 }
 
 export function select(selection: Selection | null) {
-  set({ selection })
+  if (selection?.kind === 'node') set({ selection, current: nodeKey(selection.node) })
+  else set({ selection })
+}
+
+const GROUP_OF: Record<DbObject['kind'], ObjectGroup> = {
+  table: 'tables',
+  foreignTable: 'tables',
+  view: 'views',
+  materializedView: 'views',
+  function: 'functions',
+  procedure: 'functions',
+  sequence: 'sequences',
+}
+
+/**
+ * Shows a connection, database, schema or object in the navigator: opens
+ * the panel, expands (and loads) each level above it, highlights it and
+ * scrolls it into view. Clears a filter that could hide it.
+ */
+export async function reveal(node: NodeRef) {
+  if (!get().panels.navigator) togglePanel('navigator')
+  if (get().filter !== '') setFilter('')
+  const path: NodeRef[] = [{ kind: 'connection', profileId: node.profileId }]
+  if (node.kind !== 'connection')
+    path.push({ kind: 'database', profileId: node.profileId, database: node.database })
+  if (node.kind === 'schema' || node.kind === 'group' || node.kind === 'object') {
+    path.push({ kind: 'schema', profileId: node.profileId, database: node.database, schema: node.schema })
+  }
+  if (node.kind === 'object') {
+    path.push({
+      kind: 'group',
+      profileId: node.profileId,
+      database: node.database,
+      schema: node.schema,
+      group: GROUP_OF[node.object.kind] ?? 'tables',
+    })
+  }
+  const key = nodeKey(node)
+  set({ current: key })
+  // One session in the node's own database lists everything above it too.
+  if (node.kind !== 'connection') {
+    try {
+      await ensureSession(node.profileId, node.database)
+    } catch {
+      // Each level below reports its own error.
+    }
+  }
+  for (const level of path) {
+    set((s) => ({ expanded: { ...s.expanded, [nodeKey(level)]: true } }))
+    await loadNode(level)
+  }
+  scrollToNode(key)
+}
+
+/** Scrolls the navigator row for `key` into view once it is drawn. */
+function scrollToNode(key: string, tries = 10) {
+  const row = document.querySelector<HTMLElement>(`[data-node-key="${CSS.escape(key)}"]`)
+  if (row) {
+    row.scrollIntoView?.({ block: 'nearest' })
+    return
+  }
+  if (tries > 0) requestAnimationFrame(() => scrollToNode(key, tries - 1))
 }
 
 export function setFilter(filter: string) {

@@ -11,8 +11,10 @@ import {
   testConnection,
 } from '../../ipc/store'
 import type { Engine } from '../../ipc/types'
+import { chooseFile } from '../../lib/files'
 import { COLORS } from '../../lib/target'
 import { closeDialog, errorText, profileById, saveProfile, useApp } from '../../state/app'
+import { formatUrl } from './url'
 
 /** Engines this build has drivers for. More arrive with their drivers. */
 const ENGINES: { id: Engine; name: string; port: number | null; file: boolean }[] = [
@@ -87,8 +89,19 @@ function joinArgs(args: string[]): string {
 
 const empty = (value: string) => (value.trim() === '' ? null : value.trim())
 
+const basename = (path: string) => path.split(/[\\/]/).pop() || path
+
 /** The new- and edit-connection dialog. */
-export function ConnectionForm({ profileId, pasteUrl }: { profileId: string | null; pasteUrl?: boolean }) {
+export function ConnectionForm({
+  profileId,
+  pasteUrl,
+  project,
+}: {
+  profileId: string | null
+  pasteUrl?: boolean
+  /** The folder a new connection goes in. */
+  project?: string | null
+}) {
   const existing = profileById(profileId)
   const profiles = useApp((s) => s.profiles)
   const projects = useMemo(
@@ -96,7 +109,7 @@ export function ConnectionForm({ profileId, pasteUrl }: { profileId: string | nu
     [profiles],
   )
   const [fields, setFields] = useState<ProfileFields>(() => {
-    if (!existing) return blank()
+    if (!existing) return { ...blank(), project: project ?? null }
     const { id, createdMs, updatedMs, ...rest } = existing
     return rest
   })
@@ -108,7 +121,12 @@ export function ConnectionForm({ profileId, pasteUrl }: { profileId: string | nu
       ? [existing.auth.program, ...existing.auth.args].map((a) => joinArgs([a])).join(' ')
       : '',
   )
-  const [url, setUrl] = useState('')
+  /** The URL as typed, while it differs from what the fields say; `null` mirrors the fields. */
+  const [urlDraft, setUrlDraft] = useState<string | null>(null)
+  const [urlError, setUrlError] = useState<string | null>(null)
+  const urlTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** Whether the name was typed; until it is, the name follows the URL. */
+  const [named, setNamed] = useState(Boolean(existing))
   const [status, setStatus] = useState<{ text: string; ok: boolean } | null>(null)
   const [busy, setBusy] = useState(false)
   /** The port as typed, while it is not a valid port. */
@@ -133,22 +151,61 @@ export function ConnectionForm({ profileId, pasteUrl }: { profileId: string | nu
   const final = (): ProfileFields => ({ ...fields, auth: auth(), name: fields.name.trim() })
   const typedPassword = authChoice === 'keychain' && password !== '' ? password : null
 
+  /** Reads `text` into the fields. The text stays as typed; a bad URL is said beside it. */
   const fill = async (text: string) => {
-    if (text.trim() === '') return
+    if (urlTimer.current) clearTimeout(urlTimer.current)
+    if (text.trim() === '') {
+      setUrlError(null)
+      return
+    }
     try {
       const parsed = await parseUrl(text)
+      const known = ENGINES.find((e) => e.id === parsed.fields.engine)
+      if (!known) {
+        setUrlError(`This build cannot connect to ${parsed.fields.engine} yet.`)
+        return
+      }
       setFields((f) => ({
         ...parsed.fields,
-        name: f.name || parsed.fields.name,
+        name: named ? f.name : parsed.fields.name,
         project: f.project,
         color: f.color,
         mode: f.mode,
+        // A URL with a password saves it to the keychain; one without keeps the chosen source.
+        auth: parsed.password !== null ? { kind: 'keychain' } : f.auth,
       }))
       if (parsed.password !== null) setPassword(parsed.password)
-      setUrl('')
-      setStatus({ text: 'Filled in from the URL.', ok: true })
+      setBadPort(null)
+      setUrlError(null)
     } catch (err) {
-      setStatus({ text: errorText(err), ok: false })
+      setUrlError(errorText(err))
+    }
+  }
+  const typeUrl = (text: string, now: boolean) => {
+    setUrlDraft(text)
+    if (urlTimer.current) clearTimeout(urlTimer.current)
+    if (now) void fill(text)
+    else urlTimer.current = setTimeout(() => void fill(text), 300)
+  }
+  useEffect(
+    () => () => {
+      if (urlTimer.current) clearTimeout(urlTimer.current)
+    },
+    [],
+  )
+
+  const pick = async (kind: 'database' | 'certificate') => {
+    try {
+      const file =
+        kind === 'database'
+          ? await chooseFile('database', 'Choose the database file', fields.path)
+          : await chooseFile('certificate', 'Choose the root certificate', fields.sslRootCert)
+      if (file === null) return
+      if (kind === 'database') {
+        setFields((f) => ({ ...f, path: file, name: named ? f.name : basename(file) }))
+      } else set('sslRootCert', file)
+    } catch (err) {
+      setStatus({ text: `Could not open the file chooser: ${errorText(err)}`, ok: false })
     }
   }
 
@@ -231,33 +288,52 @@ export function ConnectionForm({ profileId, pasteUrl }: { profileId: string | nu
         <div className="grid max-h-[60vh] grid-cols-[130px_1fr] items-center gap-x-3 gap-y-2.5 overflow-auto p-4">
           {section === 'connection' && (
             <>
-              <Label htmlFor="cf-url">Paste URL</Label>
-              <input
-                id="cf-url"
-                ref={urlInput}
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                onPaste={(e) => {
-                  const text = e.clipboardData.getData('text')
-                  e.preventDefault()
-                  void fill(text)
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
+              <Label htmlFor="cf-url">URL</Label>
+              <div className="flex min-w-0 flex-col gap-1">
+                <input
+                  id="cf-url"
+                  ref={urlInput}
+                  value={urlDraft ?? formatUrl(fields)}
+                  onChange={(e) => typeUrl(e.target.value, false)}
+                  onPaste={(e) => {
+                    // Pasting over the whole URL replaces it; pasting into it edits it.
+                    const input = e.currentTarget
+                    const whole = input.selectionStart === 0 && input.selectionEnd === input.value.length
+                    if (!whole && input.value !== '') return
                     e.preventDefault()
-                    void fill(url)
-                  }
-                }}
-                placeholder="postgres://user@host:5432/database"
-                className={INPUT}
-              />
+                    typeUrl(e.clipboardData.getData('text').trim(), true)
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      void fill(e.currentTarget.value)
+                    }
+                  }}
+                  onFocus={(e) => e.currentTarget.select()}
+                  onBlur={() => {
+                    if (urlError === null) setUrlDraft(null)
+                  }}
+                  aria-invalid={urlError !== null}
+                  aria-describedby="cf-url-help"
+                  placeholder="Paste a URL: postgres://user@host:5432/database"
+                  spellCheck={false}
+                  autoComplete="off"
+                  className={`${INPUT} font-mono text-[12px] aria-invalid:border-[#e5484d]`}
+                />
+                <p id="cf-url-help" className={`text-[11px] ${urlError ? 'text-[#e5484d]' : 'text-muted'}`}>
+                  {urlError ?? 'Paste or edit a URL to fill in the fields below. JDBC URLs work too.'}
+                </p>
+              </div>
               <Label htmlFor="cf-name">Name</Label>
               <input
                 id="cf-name"
                 ref={nameInput}
                 required
                 value={fields.name}
-                onChange={(e) => set('name', e.target.value)}
+                onChange={(e) => {
+                  setNamed(e.target.value.trim() !== '')
+                  set('name', e.target.value)
+                }}
                 placeholder="prod-pg"
                 className={INPUT}
               />
@@ -277,14 +353,18 @@ export function ConnectionForm({ profileId, pasteUrl }: { profileId: string | nu
               {engine?.file ? (
                 <>
                   <Label htmlFor="cf-path">File</Label>
-                  <input
-                    id="cf-path"
-                    required
-                    value={fields.path ?? ''}
-                    onChange={(e) => set('path', empty(e.target.value))}
-                    placeholder="/path/to/database.db"
-                    className={INPUT}
-                  />
+                  <div className="flex gap-2">
+                    <input
+                      id="cf-path"
+                      required
+                      value={fields.path ?? ''}
+                      onChange={(e) => set('path', empty(e.target.value))}
+                      placeholder="/path/to/database.db"
+                      spellCheck={false}
+                      className={`${INPUT} flex-1`}
+                    />
+                    <Button onClick={() => void pick('database')}>Choose…</Button>
+                  </div>
                 </>
               ) : (
                 <>
@@ -412,14 +492,20 @@ export function ConnectionForm({ profileId, pasteUrl }: { profileId: string | nu
                 ))}
               </select>
               <Label htmlFor="cf-cert">Root certificate</Label>
-              <input
-                id="cf-cert"
-                value={fields.sslRootCert ?? ''}
-                onChange={(e) => set('sslRootCert', empty(e.target.value))}
-                placeholder="PEM file; the OS trust store when empty"
-                disabled={engine?.file}
-                className={INPUT}
-              />
+              <div className="flex gap-2">
+                <input
+                  id="cf-cert"
+                  value={fields.sslRootCert ?? ''}
+                  onChange={(e) => set('sslRootCert', empty(e.target.value))}
+                  placeholder="PEM file; the OS trust store when empty"
+                  disabled={engine?.file}
+                  spellCheck={false}
+                  className={`${INPUT} flex-1`}
+                />
+                <Button onClick={() => void pick('certificate')} disabled={engine?.file}>
+                  Choose…
+                </Button>
+              </div>
               {engine?.file && (
                 <p className="col-span-2 text-[12px] text-muted">
                   A file database has no network security settings.

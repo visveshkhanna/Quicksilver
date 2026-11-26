@@ -142,6 +142,12 @@ export const COMMANDS: readonly Command[] = [
     run: () => openDialog({ kind: 'connection', profileId: null }),
   },
   {
+    id: 'import-dbeaver',
+    title: 'Import connections from DBeaver',
+    enabled: always,
+    run: () => openDialog({ kind: 'importDbeaver' }),
+  },
+  {
     id: 'toggle-navigator',
     title: 'Show or hide the navigator',
     enabled: always,
