@@ -85,6 +85,23 @@ All notable changes are recorded here. The format follows
 - Typing on a cell starts editing it with what was typed.
 - Each change in the review can be taken back out with Undo; the review lists
   new rows, which the grid does not draw, and the edit bar counts them.
+- Import connections from DBeaver, offered on first run when DBeaver has
+  some and at any time from the `+` menu or the command palette. Its folders
+  and projects become project folders, and saved passwords go straight from
+  DBeaver's files to the OS keychain. Connections already imported are not
+  offered again.
+- Project folders nest to any depth (eight levels). Connections and folders
+  can be dragged between folders, and folders can be created, renamed and
+  deleted from the navigator.
+- `Mod+P` and the navigator filter search the tables of every database on a
+  connection. The databases are read in the background, over connections
+  that are closed once read, and results show up as they arrive.
+- Picking a table with `Mod+P` or a database with `Mod+K` shows it in the
+  navigator, opened down to it and highlighted.
+- Buttons in the title bar show and hide the navigator and the inspector,
+  and the inspector has its own close button. Space shows a hidden inspector.
+- A file chooser for the SQLite file and the TLS root certificate.
+- JDBC URLs (`jdbc:postgresql://…?user=…&password=…`) can be pasted.
 
 ### Changed
 
@@ -100,6 +117,10 @@ All notable changes are recorded here. The format follows
   connect with changed, not for a new name, colour or project.
 - A grid keeps its column widths, scroll and cursor across tab and view
   switches.
+- The connection form's URL field always shows the URL for the fields
+  below it (never the password). Pasting or editing a URL fills them in,
+  and a URL that cannot be read is said beside it instead of being lost.
+- Deleting a connection asks in the app's own dialog.
 
 ### Fixed
 
