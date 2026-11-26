@@ -180,13 +180,16 @@ export function scrollToColumn(l: Layout, col: number, scrollLeft: number, width
   return scrollLeft
 }
 
-/** A starting width for a column: room for its name and type, or its widest sample. */
+/**
+ * A starting width for a column: room for its header (`header`, the drawn
+ * width of its name and type), or its widest sample.
+ */
 export function initialWidth(
-  name: string,
+  header: number,
   samples: (string | null)[],
   measure: (text: string) => number,
 ): number {
-  let widest = measure(name) + 34
+  let widest = header
   for (const s of samples) widest = Math.max(widest, measure(display(s ?? 'NULL')) + 16)
   return clamp(Math.ceil(widest), MIN_WIDTH, MAX_AUTO_WIDTH)
 }

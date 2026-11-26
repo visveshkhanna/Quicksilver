@@ -1,5 +1,6 @@
 import * as Menu from '@radix-ui/react-context-menu'
 import type { ReactNode } from 'react'
+import { Icon, type IconName } from '../../app/icons'
 import { Kbd } from '../../app/Kbd'
 import { MenuItem as Item, MenuContent, MenuSeparator as Separator } from '../../app/menu'
 import { Button, ColorDot } from '../../app/ui'
@@ -7,7 +8,6 @@ import * as ipc from '../../ipc/commands'
 import type { Profile } from '../../ipc/store'
 import type { ColumnInfo, DbObject } from '../../ipc/types'
 import { copyText } from '../../lib/clipboard'
-import { selectFrom } from '../../lib/target'
 import {
   deleteProfile,
   disconnectProfile,
@@ -19,6 +19,7 @@ import {
   nodeKey,
   type ObjectGroup,
   openDialog,
+  openTable,
   refreshNode,
   retarget,
   say,
@@ -34,6 +35,16 @@ const GROUPS: { group: ObjectGroup; title: string; kinds: DbObject['kind'][] }[]
   { group: 'functions', title: 'Functions', kinds: ['function', 'procedure'] },
   { group: 'sequences', title: 'Sequences', kinds: ['sequence'] },
 ]
+
+const ICONS: Record<DbObject['kind'], IconName> = {
+  table: 'table',
+  foreignTable: 'table',
+  view: 'view',
+  materializedView: 'view',
+  function: 'function',
+  procedure: 'function',
+  sequence: 'sequence',
+}
 
 const OPENABLE = new Set<DbObject['kind']>(['table', 'view', 'materializedView', 'foreignTable'])
 
@@ -340,6 +351,7 @@ function DatabaseNode({ profile, database }: { profile: Profile; database: strin
         node={node}
         depth={1}
         expandable
+        lead={<Icon name="database" className="text-muted" />}
         label={database}
         onOpen={() => newTab(target)}
         menu={
@@ -372,6 +384,7 @@ function SchemaNode({ profile, database, schema }: { profile: Profile; database:
         node={node}
         depth={2}
         expandable
+        lead={<Icon name="schema" className="text-muted" />}
         label={schema}
         onOpen={() => newTab({ profileId: profile.id, database })}
         menu={
@@ -449,17 +462,14 @@ function ObjectNode({
 }) {
   const node: NodeRef = { kind: 'object', profileId: profile.id, database, schema, object }
   const openable = OPENABLE.has(object.kind)
-  const open = () =>
-    newTab({ profileId: profile.id, database }, selectFrom(profile.engine, schema, object.name), {
-      schema,
-      name: object.name,
-    })
+  const open = () => void openTable({ profileId: profile.id, database }, schema, object.name)
   return (
     <>
       <Row
         node={node}
         depth={4}
         expandable={openable}
+        lead={<Icon name={ICONS[object.kind]} className="text-muted" />}
         label={object.name}
         aside={object.kind === 'materializedView' ? 'mat.' : object.kind === 'procedure' ? 'proc' : undefined}
         onOpen={openable ? open : undefined}

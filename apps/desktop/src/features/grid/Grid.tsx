@@ -15,6 +15,7 @@ import {
   errorText,
   openDialog,
   type ResultView,
+  refocusGrid,
   say,
   select,
   setCell,
@@ -22,6 +23,7 @@ import {
   toggleDeleteRows,
   useApp,
 } from '../../state/app'
+import { remember, remembered } from './memory'
 import {
   borderAt,
   type Cell,
@@ -33,6 +35,7 @@ import {
   HEADER_HEIGHT,
   initialWidth,
   layout,
+  MAX_AUTO_WIDTH,
   MIN_WIDTH,
   move,
   ROW_HEIGHT,
@@ -78,6 +81,29 @@ function measure(text: string, font = FONT): number {
   return measureContext.measureText(text).width
 }
 
+/**
+ * The width a header needs: padding, the name, a gap, the type, and room for
+ * the sort arrow.
+ */
+function headerWidth(column: Column | undefined): number {
+  if (!column) return MIN_WIDTH
+  return 8 + measure(column.name, HEADER_FONT) + 6 + measure(column.dbType) + 8 + 14
+}
+
+/**
+ * A cell being edited. What it names (source row, result column, the value
+ * it had) is taken when editing starts, so keeping it still works after its
+ * page has scrolled out of the cache.
+ */
+type Editing = {
+  row: number
+  col: number
+  source: number
+  column: number
+  original: string | null
+  value: string
+}
+
 type Props = {
   tabId: string
   result: ResultView
@@ -101,11 +127,11 @@ export function Grid({ tabId, result, insertTable }: Props) {
     return d?.resultId === result.resultId ? d : null
   })
   const deleted = useMemo(() => new Set(draft?.deletes ?? []), [draft])
-  const [editing, setEditingState] = useState<{ row: number; col: number; value: string } | null>(null)
+  const [editing, setEditingState] = useState<Editing | null>(null)
   // Finishing an edit moves focus, which blurs the input; a blur after the
   // edit was kept or cancelled must not keep it again.
   const editOpen = useRef(false)
-  const setEditing = (next: { row: number; col: number; value: string } | null) => {
+  const setEditing = (next: Editing | null) => {
     editOpen.current = next !== null
     setEditingState(next)
   }
@@ -113,15 +139,19 @@ export function Grid({ tabId, result, insertTable }: Props) {
   const canvas = useRef<HTMLCanvasElement>(null)
   const [size, setSize] = useState({ width: 0, height: 0 })
   const [scroll, setScroll] = useState({ top: 0, left: 0 })
-  const [states, setStates] = useState<ColumnState[]>(() =>
-    result.columns.map((c) => ({
-      width: Math.max(MIN_WIDTH, Math.min(240, c.name.length * 8 + 40)),
-      hidden: false,
-      pinned: false,
-    })),
+  const [states, setStates] = useState<ColumnState[]>(
+    () =>
+      remembered.get(result.resultId)?.states ??
+      result.columns.map((c) => ({
+        width: Math.max(MIN_WIDTH, Math.min(MAX_AUTO_WIDTH, headerWidth(c))),
+        hidden: false,
+        pinned: false,
+      })),
   )
-  const sized = useRef(false)
-  const [selection, setSelection] = useState<Selection | null>(null)
+  const sized = useRef(remembered.has(result.resultId))
+  const [selection, setSelection] = useState<Selection | null>(
+    () => remembered.get(result.resultId)?.selection ?? null,
+  )
   const [menu, setMenu] = useState<MenuTarget>(null)
   const [, redraw] = useState(0)
   const overrides = useApp((s) => s.overrides)
@@ -181,7 +211,7 @@ export function Grid({ tabId, result, insertTable }: Props) {
       prev.map((s, i) => ({
         ...s,
         width: initialWidth(
-          result.columns[i]?.name ?? '',
+          headerWidth(result.columns[i]),
           sample.map((row) => row[i] ?? null),
           (t) => measure(t),
         ),
@@ -190,6 +220,15 @@ export function Grid({ tabId, result, insertTable }: Props) {
   })
 
   // --- Drawing ---------------------------------------------------------------
+
+  // The colours come from the theme, so repaint when the OS switches it.
+  useEffect(() => {
+    const query = window.matchMedia?.('(prefers-color-scheme: dark)')
+    if (!query) return
+    const repaint = () => redraw((n) => n + 1)
+    query.addEventListener('change', repaint)
+    return () => query.removeEventListener('change', repaint)
+  }, [])
 
   useEffect(() => {
     const element = canvas.current
@@ -209,6 +248,8 @@ export function Grid({ tabId, result, insertTable }: Props) {
     const y0 = HEADER_HEIGHT - (scrollTop % ROW_HEIGHT)
     const firstRow = Math.floor(scrollTop / ROW_HEIGHT)
     const rowsShown = Math.ceil((height - HEADER_HEIGHT) / ROW_HEIGHT) + 1
+    // Where the last row ends, so lines stop there rather than run on below.
+    const rowsBottom = Math.min(height, HEADER_HEIGHT + rowCount * ROW_HEIGHT - scrollTop)
 
     const drawColumn = (c: number) => {
       const x = columnX(l, c, scroll.left)
@@ -259,7 +300,7 @@ export function Grid({ tabId, result, insertTable }: Props) {
       }
       // Grid lines.
       ctx.fillStyle = colors.border
-      ctx.fillRect(x + w - 1, HEADER_HEIGHT, 1, height - HEADER_HEIGHT)
+      ctx.fillRect(x + w - 1, HEADER_HEIGHT, 1, Math.max(0, rowsBottom - HEADER_HEIGHT))
       ctx.restore()
     }
 
@@ -390,9 +431,22 @@ export function Grid({ tabId, result, insertTable }: Props) {
     [cache, l, rowCount, scale, scrollTop],
   )
 
-  // New rows of the same result keep the selection; a different result clears it.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reset per result
-  useEffect(() => setSelection(null), [result.resultId])
+  // The grid is keyed by result, so a new result starts fresh; coming back
+  // to one restores where it was left, and a re-run started from the grid
+  // hands focus to the new one.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: once, on mount
+  useEffect(() => {
+    const element = scroller.current
+    const was = remembered.get(result.resultId)
+    if (element && was) {
+      element.scrollTop = was.scroll.top
+      element.scrollLeft = was.scroll.left
+    }
+    if (element && refocusGrid.delete(tabId)) element.focus()
+  }, [])
+  useEffect(() => {
+    remember(result.resultId, { states, scroll, selection })
+  }, [result.resultId, states, scroll, selection])
 
   const sourceColumns = (sel: Selection | null): number[] => {
     if (!sel) return []
@@ -414,8 +468,12 @@ export function Grid({ tabId, result, insertTable }: Props) {
 
   const inspect = (sel = selection) => {
     if (!sel) return
-    const row = cache.row(sel.focus.row)
-    if (row) select({ kind: 'row', columns: result.columns, row, position: sel.focus.row })
+    const stored = cache.row(sel.focus.row)
+    if (!stored) return
+    // Pending edits show as they will be saved.
+    const source = cache.source(sel.focus.row)
+    const row = stored.map((value, column) => shown(draft, source, column, value).value)
+    select({ kind: 'row', columns: result.columns, row, position: sel.focus.row })
   }
 
   const pageRows = Math.max(1, Math.floor((size.height - HEADER_HEIGHT) / ROW_HEIGHT) - 1)
@@ -439,7 +497,8 @@ export function Grid({ tabId, result, insertTable }: Props) {
     return true
   }
 
-  const startEditing = (cell = selection?.focus) => {
+  /** Opens the cell editor on `cell`, holding its value, or `typed` in place of it. */
+  const startEditing = (cell = selection?.focus, typed?: string) => {
     if (!cell || !editable()) return
     const source = cache.source(cell.row)
     const row = cache.row(cell.row)
@@ -448,10 +507,12 @@ export function Grid({ tabId, result, insertTable }: Props) {
       say('That row is marked for deletion.')
       return
     }
-    const column = l.order[cell.col] as number
-    const { value } = shown(draft, source, column, row[column] ?? null)
+    const column = l.order[cell.col]
+    if (column === undefined) return
+    const original = row[column] ?? null
+    const { value } = shown(draft, source, column, original)
     setSelection({ anchor: cell, focus: cell })
-    setEditing({ row: cell.row, col: cell.col, value: value ?? '' })
+    setEditing({ row: cell.row, col: cell.col, source, column, original, value: typed ?? value ?? '' })
   }
 
   const commitEdit = (value: string | null, then?: { rows: number; cols: number }) => {
@@ -460,12 +521,7 @@ export function Grid({ tabId, result, insertTable }: Props) {
     setEditing(null)
     scroller.current?.focus()
     if (!current) return
-    const source = cache.source(current.row)
-    const row = cache.row(current.row)
-    if (source !== undefined && row) {
-      const column = l.order[current.col] as number
-      setCell(tabId, result.resultId, source, column, value, row[column] ?? null)
-    }
+    setCell(tabId, result.resultId, current.source, current.column, value, current.original)
     if (then) {
       focusCell(move({ anchor: current, focus: current }, then.rows, then.cols, false, rowCount, colCount))
     }
@@ -481,7 +537,8 @@ export function Grid({ tabId, result, insertTable }: Props) {
       const values = cache.row(row)
       if (source === undefined || !values) continue
       for (let col = r.left; col <= r.right; col++) {
-        const column = l.order[col] as number
+        const column = l.order[col]
+        if (column === undefined) continue
         out.push({ source, column, original: values[column] ?? null })
       }
     }
@@ -527,6 +584,12 @@ export function Grid({ tabId, result, insertTable }: Props) {
       startEditing()
       return
     }
+    // Typing on a cell replaces its value, as in a spreadsheet.
+    if (event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey && selection) {
+      event.preventDefault()
+      startEditing(undefined, event.key)
+      return
+    }
     const mod = platform === 'mac' ? event.metaKey : event.ctrlKey
     const extend = event.shiftKey
     const go = (rows: number, cols: number) => {
@@ -553,11 +616,11 @@ export function Grid({ tabId, result, insertTable }: Props) {
     }
   }
 
-  // Keep the inspector on the cursor row.
+  // The inspector follows the cursor row, so moving through rows shows each in full.
   // biome-ignore lint/correctness/useExhaustiveDependencies: follows the cursor row
   useEffect(() => {
-    if (selection && useApp.getState().selection?.kind === 'row') inspect()
-  }, [selection?.focus.row, cache.row(selection?.focus.row ?? -1)])
+    if (selection) inspect()
+  }, [selection?.focus.row, cache.row(selection?.focus.row ?? -1), draft])
 
   // --- Mouse -------------------------------------------------------------------
 
@@ -586,7 +649,7 @@ export function Grid({ tabId, result, insertTable }: Props) {
     for (let r = first; r < end; r++) samples.push(cache.row(r)?.[source] ?? null)
     setWidth(
       col,
-      initialWidth(result.columns[source]?.name ?? '', samples, (t) => measure(t)),
+      initialWidth(headerWidth(result.columns[source]), samples, (t) => measure(t)),
     )
   }
 
@@ -681,9 +744,15 @@ export function Grid({ tabId, result, insertTable }: Props) {
     setMenu(cell ? { kind: 'cells' } : null)
   }
 
+  /** Pins, unpins, hides or shows columns; display positions move, so the selection goes. */
+  const reshape = (change: (prev: ColumnState[]) => ColumnState[]) => {
+    setSelection(null)
+    setEditing(null)
+    setStates(change)
+  }
   const setColumn = (col: number, change: Partial<ColumnState>) => {
     const source = l.order[col] as number
-    setStates((prev) => prev.map((s, i) => (i === source ? { ...s, ...change } : s)))
+    reshape((prev) => prev.map((s, i) => (i === source ? { ...s, ...change } : s)))
   }
 
   // --- What a screen reader hears -------------------------------------------------
@@ -704,6 +773,16 @@ export function Grid({ tabId, result, insertTable }: Props) {
     description = `Row ${row + 1} of ${rowCount.toLocaleString()}, ${name}: ${
       value === undefined ? 'loading' : value === null ? 'NULL' : value
     }${marks.length > 0 ? ` (${marks.join(', ')})` : ''}`
+  }
+
+  const canEdit = Boolean(result.edit && !result.edit.reason)
+  const selectedRows = selection ? rect(selection) : null
+  const selectedRowCount = selectedRows ? selectedRows.bottom - selectedRows.top + 1 : 0
+  // The menu offers to keep the rows when every selected row is marked for deletion.
+  let selectionDeleted = selectedRows !== null && menu?.kind === 'cells'
+  for (let r = selectedRows?.top ?? 0; selectionDeleted && selectedRows && r <= selectedRows.bottom; r++) {
+    const source = cache.source(r)
+    if (source === undefined || !deleted.has(source)) selectionDeleted = false
   }
 
   const hiddenCount = states.filter((s) => s.hidden).length
@@ -756,17 +835,19 @@ export function Grid({ tabId, result, insertTable }: Props) {
               Copy as INSERT statements
             </MenuItem>
             <MenuSeparator />
-            <MenuSeparator />
-            <MenuItem onSelect={() => startEditing()} keys={keys('edit-cell')}>
+            <MenuItem disabled={!canEdit} onSelect={() => startEditing()} keys={keys('edit-cell')}>
               Edit cell
             </MenuItem>
-            <MenuItem onSelect={setNull} keys={keys('set-null')}>
+            <MenuItem disabled={!canEdit} onSelect={setNull} keys={keys('set-null')}>
               Set to NULL
             </MenuItem>
-            <MenuItem onSelect={deleteRows} keys={keys('delete-rows')}>
-              Delete or keep rows
+            <MenuItem disabled={!canEdit} onSelect={deleteRows} keys={keys('delete-rows')}>
+              {selectionDeleted ? 'Keep' : 'Delete'}{' '}
+              {selectedRowCount === 1 ? 'row' : `${selectedRowCount} rows`}
             </MenuItem>
-            <MenuItem onSelect={addRow}>Add a row…</MenuItem>
+            <MenuItem disabled={!canEdit} onSelect={addRow}>
+              Add a row…
+            </MenuItem>
             <MenuSeparator />
             <MenuItem onSelect={() => inspect()} keys={keys('inspect-row')}>
               Show row in the inspector
@@ -811,7 +892,7 @@ export function Grid({ tabId, result, insertTable }: Props) {
               Hide column
             </MenuItem>
             {hiddenCount > 0 && (
-              <MenuItem onSelect={() => setStates((prev) => prev.map((s) => ({ ...s, hidden: false })))}>
+              <MenuItem onSelect={() => reshape((prev) => prev.map((s) => ({ ...s, hidden: false })))}>
                 Show {hiddenCount} hidden column{hiddenCount === 1 ? '' : 's'}
               </MenuItem>
             )}
@@ -845,7 +926,8 @@ export function Grid({ tabId, result, insertTable }: Props) {
         <input
           // biome-ignore lint/a11y/noAutofocus: editing starts on a key or double-click
           autoFocus
-          aria-label={`New value for ${result.columns[l.order[editing.col] as number]?.name ?? 'the cell'}`}
+          data-cell-editor
+          aria-label={`New value for ${result.columns[editing.column]?.name ?? 'the cell'}`}
           value={editing.value}
           spellCheck={false}
           autoCapitalize="off"

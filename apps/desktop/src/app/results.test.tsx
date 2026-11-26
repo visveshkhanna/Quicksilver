@@ -142,13 +142,31 @@ describe('the grid', () => {
     expect(document.activeElement?.getAttribute('aria-label')).toBe('SQL editor')
   })
 
-  it('shows the cursor row in the inspector', async () => {
+  it('shows the cursor row in the inspector as the cursor moves', async () => {
     const { user } = await withRows()
-    await user.keyboard('{Control>}j{/Control}{ArrowDown}{ArrowDown}{ArrowDown} ')
+    await user.keyboard('{Control>}j{/Control}{ArrowDown}{ArrowDown}{ArrowDown}')
     const inspector = screen.getByRole('complementary', { name: 'Inspector' })
     await waitFor(() => expect(within(inspector).getByText('NULL')).toBeTruthy())
     await user.keyboard('{ArrowUp}')
     await waitFor(() => expect(within(inspector).getByText('c')).toBeTruthy())
+  })
+
+  it('is as it was left after switching tabs, and re-running keeps focus in it', async () => {
+    const { user, backend } = await withRows()
+    await user.keyboard('{Control>}j{/Control}{ArrowDown}{ArrowDown}{ArrowRight}')
+    await waitFor(() => expect(gridCursor()).toBe('Row 2 of 3, name: c'))
+    const inspector = screen.getByRole('complementary', { name: 'Inspector' })
+    await user.keyboard('{Control>}t{/Control}')
+    // Another tab's row is not left in the inspector.
+    expect(within(inspector).queryByText('c')).toBeNull()
+    await user.keyboard('{Control>}1{/Control}')
+    await waitFor(() => expect(gridCursor()).toBe('Row 2 of 3, name: c'))
+
+    act(() => screen.getByRole('grid', { name: 'Result rows' }).focus())
+    const runs = backend.called('run').length
+    await user.keyboard('{Control>}{Enter}{/Control}')
+    await waitFor(() => expect(backend.called('run')).toHaveLength(runs + 1))
+    await waitFor(() => expect(document.activeElement?.getAttribute('aria-label')).toBe('Result rows'))
   })
 
   it('sorts from the header menu and refetches in the new order', async () => {

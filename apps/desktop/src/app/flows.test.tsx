@@ -8,7 +8,7 @@ import { clearMocks } from '@tauri-apps/api/mocks'
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { boot, resetApp, useApp } from '../state/app'
+import { boot, resetApp, saveProfile, useApp } from '../state/app'
 import { databaseEntry, fakeBackend, objectEntry, profile } from '../test/backend'
 import { App } from './App'
 
@@ -167,8 +167,8 @@ describe('tabs', () => {
 })
 
 describe('Mod+P goes to an object', () => {
-  it('lists the connection’s tables and opens a query on one', async () => {
-    const { user } = await start()
+  it('lists the connection’s tables, opens one and shows its rows', async () => {
+    const { user, backend } = await start()
     await user.keyboard('{Control>}k{/Control}')
     await user.type(await screen.findByRole('combobox'), 'prod quicksilver')
     await user.keyboard('{Enter}')
@@ -186,6 +186,18 @@ describe('Mod+P goes to an object', () => {
       sql: 'SELECT * FROM "sales"."orders";\n',
       table: { schema: 'sales', name: 'orders' },
     })
+    await waitFor(() => expect(backend.called('run')).toHaveLength(1))
+    expect(backend.called('run')[0]?.args.script).toBe('SELECT * FROM "sales"."orders";\n')
+
+    // Going to it again brings its tab forward instead of opening another.
+    await user.keyboard('{Control>}t{/Control}')
+    expect(tabs()).toHaveLength(3)
+    await user.keyboard('{Control>}p{/Control}')
+    await user.type(await screen.findByRole('combobox', { name: 'Go to object' }), 'sales.orders')
+    await user.keyboard('{Enter}')
+    expect(tabs()).toHaveLength(3)
+    expect(activeTitle()?.title).toBe('orders')
+    expect(backend.called('run')).toHaveLength(1)
   })
 
   it('is not offered before the tab has a database', async () => {
@@ -257,6 +269,33 @@ describe('passwords', () => {
     )
     expect(backend.called('update_profile')[0]?.args.password).toEqual({ kind: 'set', password: 'p@ss' })
     await waitFor(() => expect(Object.keys(useApp.getState().sessions).length).toBeGreaterThan(0))
+  })
+})
+
+describe('editing a connection', () => {
+  it('keeps sessions open for a new colour, and reconnects for a new host', async () => {
+    const { user, backend } = await start()
+    await user.keyboard('{Control>}k{/Control}')
+    await user.type(await screen.findByRole('combobox'), 'prod quicksilver')
+    await user.keyboard('{Enter}')
+    await waitFor(() => expect(Object.keys(useApp.getState().sessions)).toHaveLength(1))
+    const { id, createdMs, updatedMs, ...fields } = pg
+    await act(() => saveProfile('pg', { ...fields, color: 'blue' }, { kind: 'keep' }))
+    expect(backend.called('disconnect')).toHaveLength(0)
+    await act(() => saveProfile('pg', { ...fields, host: 'db.internal' }, { kind: 'keep' }))
+    expect(backend.called('disconnect')).toHaveLength(1)
+  })
+
+  it('says what is wrong instead of saving a bad port', async () => {
+    const { user, backend } = await start()
+    await user.keyboard('{Control>}{Shift>}n{/Shift}{/Control}')
+    const form = await screen.findByRole('dialog', { name: 'New connection' })
+    await user.type(within(form).getByLabelText('Name'), 'x')
+    await user.type(within(form).getByLabelText('Port'), '99999')
+    expect((within(form).getByLabelText('Port') as HTMLInputElement).value).toBe('99999')
+    await user.click(within(form).getByRole('button', { name: 'Save' }))
+    expect(within(form).getByRole('status').textContent).toBe('The port must be a number from 1 to 65535.')
+    expect(backend.called('create_profile')).toHaveLength(0)
   })
 })
 

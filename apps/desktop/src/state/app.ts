@@ -3,6 +3,7 @@
 
 import { create } from 'zustand'
 import { forgetEditor, selectionIn } from '../features/editor/registry'
+import { forgetGrids } from '../features/grid/memory'
 import * as ipc from '../ipc/commands'
 import type { CatalogEntry, Notice, Profile, ProfileFields } from '../ipc/store'
 import * as saved from '../ipc/store'
@@ -112,7 +113,22 @@ export type Dialog =
   | { kind: 'shortcuts' }
   | { kind: 'connection'; profileId: string | null; pasteUrl?: boolean }
   | { kind: 'confirmRun'; message: string; statements: string[]; run: () => void }
-  | { kind: 'review'; tabId: string; statements: string[]; error: string | null; applying: boolean }
+  | {
+      kind: 'review'
+      tabId: string
+      /** What will be saved: exactly the edits these statements were generated from. */
+      edits: RowEdit[]
+      statements: string[]
+      error: string | null
+      applying: boolean
+    }
+  | {
+      kind: 'confirm'
+      title: string
+      message: string
+      confirmLabel: string
+      run: () => void
+    }
   | { kind: 'insertRow'; tabId: string }
 
 export type PasswordRequest = {
@@ -199,6 +215,10 @@ const set = useApp.setState
 export function resetApp() {
   set(initial, true)
   pending.clear()
+  starting.clear()
+  runTokens.clear()
+  refocusGrid.clear()
+  forgetGrids()
 }
 
 // --- Boot -------------------------------------------------------------------
@@ -287,11 +307,20 @@ export async function saveProfile(
   const profile = id
     ? await saved.updateProfile(id, fields, password)
     : await saved.createProfile(fields, password)
+  const before = id ? profileById(id) : undefined
   set((s) => ({
     profiles: id ? s.profiles.map((p) => (p.id === id ? profile : p)) : [...s.profiles, profile],
   }))
-  if (id) await disconnectProfile(id)
+  // Open sessions stay unless something they were opened with changed: a
+  // new name, colour or project does not end anyone's query.
+  if (before && (password.kind !== 'keep' || connectionChanged(before, profile)))
+    await disconnectProfile(before.id)
   return profile
+}
+
+function connectionChanged(a: Profile, b: Profile): boolean {
+  const strip = ({ name, color, project, createdMs, updatedMs, ...rest }: Profile) => rest
+  return JSON.stringify(strip(a)) !== JSON.stringify(strip(b))
 }
 
 export async function deleteProfile(id: string) {
@@ -442,6 +471,34 @@ function nextTitle(): string {
 }
 
 /**
+ * Runs `then` at once when tab `tabId` has no unsaved row changes; otherwise
+ * asks first, since `then` (`what`, such as "run the query") throws them away.
+ */
+function unlessDraft(tabId: string, what: string, then: () => void) {
+  const tab = get().tabs.find((t) => t.id === tabId)
+  const n = draftSize(tab?.draft ?? null)
+  if (n === 0) {
+    then()
+    return
+  }
+  openDialog({
+    kind: 'confirm',
+    title: 'Discard unsaved changes?',
+    message: `This tab has ${n} unsaved change${n === 1 ? '' : 's'} to its rows. To ${what}, they are discarded.`,
+    confirmLabel: 'Discard changes',
+    run: () => {
+      updateTab(tabId, { draft: null })
+      then()
+    },
+  })
+}
+
+/** Whether the selection is a row from a result (rather than a navigator node). */
+function forgetRowSelection() {
+  if (get().selection?.kind === 'row') set({ selection: null })
+}
+
+/**
  * Opens a tab on `target` (or the front tab's target) and makes it active.
  * A tab opened on `table` gets the filter bar.
  */
@@ -459,28 +516,67 @@ export function newTab(target?: Target | null, sql = '', table: TableSource | nu
     cursor: sql.length,
     table,
   }
+  forgetRowSelection()
   set((s) => ({ tabs: [...s.tabs, tab], activeTabId: tab.id }))
   persistTab(tab, true)
   if (where?.profileId) touchTarget({ profileId: where.profileId, database: where.database })
   return tab
 }
 
+/**
+ * Shows a table's or view's rows: brings its tab forward if one is open,
+ * otherwise opens a tab on it and runs it.
+ */
+export async function openTable(target: Target, schema: string | null, name: string) {
+  const open = get().tabs.find(
+    (t) =>
+      t.profileId === target.profileId &&
+      t.database === target.database &&
+      t.table?.schema === schema &&
+      t.table?.name === name,
+  )
+  if (open) {
+    activateTab(open.id)
+    return
+  }
+  const profile = profileById(target.profileId)
+  if (!profile) return
+  let sql: string
+  try {
+    sql = await ipc.filterQuery(profile.engine, schema, name, '')
+  } catch (err) {
+    say(errorText(err), true)
+    return
+  }
+  const tab = newTab(target, sql, { schema, name })
+  await runScript(tab.id, sql, 0, ROW_CAP)
+}
+
 export function activateTab(id: string) {
+  if (id !== get().activeTabId) forgetRowSelection()
   set({ activeTabId: id })
 }
 
 export function jumpToTab(index: number) {
   const tab = get().tabs[index]
-  if (tab) set({ activeTabId: tab.id })
+  if (tab) activateTab(tab.id)
 }
 
+/** Closes tab `id`, asking first when it has unsaved row changes. */
 export function closeTab(id = get().activeTabId) {
+  if (id) unlessDraft(id, 'close the tab', () => closeNow(id))
+}
+
+function closeNow(id: string) {
   const tabs = get().tabs
   const index = tabs.findIndex((t) => t.id === id)
   const tab = tabs[index]
   if (!tab) return
+  // A run still starting has no id yet; dropping its token makes it stop itself.
+  runTokens.delete(tab.id)
   if (tab.run?.status === 'running' && tab.run.runId !== null) void ipc.cancelRun(tab.run.runId)
   freeResults(tab)
+  forgetRowSelection()
   forgetEditor(tab.id)
   clearTimeout(saveTimers.get(tab.id))
   const rest = tabs.filter((t) => t.id !== id)
@@ -488,7 +584,10 @@ export function closeTab(id = get().activeTabId) {
   set((s) => ({
     tabs: rest,
     activeTabId: s.activeTabId === id ? (next?.id ?? null) : s.activeTabId,
-    closedTabs: [{ ...tab, run: null, plan: null, view: 'results' as const }, ...s.closedTabs].slice(0, 20),
+    closedTabs: [
+      { ...tab, run: null, plan: null, draft: null, view: 'results' as const },
+      ...s.closedTabs,
+    ].slice(0, 20),
   }))
   void saved.deleteBuffer(tab.id).catch(() => {})
 }
@@ -497,12 +596,16 @@ export function reopenTab() {
   const [tab, ...rest] = get().closedTabs
   if (!tab) return
   const restored = { ...tab, title: get().tabs.some((t) => t.title === tab.title) ? nextTitle() : tab.title }
+  forgetRowSelection()
   set((s) => ({ tabs: [...s.tabs, restored], activeTabId: restored.id, closedTabs: rest }))
   persistTab(restored, true)
 }
 
 export function setTabText(id: string, sql: string, cursor: number) {
   updateTab(id, { sql, cursor })
+  // The editor drops an error's underline once the text changes; forget it
+  // too, or it would come back at the old place when the editor remounts.
+  updateTab(id, (t) => (t.run?.errorAt != null ? { run: { ...t.run, errorAt: null } } : {}))
   const tab = get().tabs.find((t) => t.id === id)
   if (tab) persistTab(tab)
 }
@@ -511,16 +614,32 @@ export function setTabCursor(id: string, cursor: number) {
   updateTab(id, { cursor })
 }
 
-/** Points tab `id` (or a new tab when there is none) at `target`. */
+/**
+ * Points tab `id` (or a new tab when there is none) at `target`. Results
+ * from the old target are put away, so nothing on screen (or saved from the
+ * edit bar) belongs to a database the tab no longer points at.
+ */
 export function retarget(target: Target, id = get().activeTabId) {
   const tab = get().tabs.find((t) => t.id === id)
   if (!tab) {
     newTab(target)
     return
   }
-  updateTab(tab.id, { profileId: target.profileId, database: target.database })
-  persistTab({ ...tab, ...target }, true)
-  touchTarget(target)
+  if (tab.profileId === target.profileId && tab.database === target.database) return
+  if (tab.run?.status === 'running') {
+    say('Cancel the running query before switching this tab to another database.')
+    return
+  }
+  unlessDraft(tab.id, 'switch database', () => {
+    const current = get().tabs.find((t) => t.id === tab.id)
+    if (!current) return
+    freeResults(current)
+    updateTab(tab.id, { run: null, plan: null, draft: null })
+    forgetRowSelection()
+    updateTab(tab.id, { profileId: target.profileId, database: target.database })
+    persistTab({ ...current, ...target }, true)
+    touchTarget(target)
+  })
 }
 
 /** Records `target` as just used, and starts connecting so it is ready. */
@@ -587,7 +706,10 @@ async function sessionFor(tab: Tab): Promise<{ profile: Profile; session: Sessio
     return null
   }
   try {
-    return { profile, session: await ensureSession(profile.id, tab.database) }
+    if (!get().sessions[targetKey(profile.id, tab.database)]) say(`Connecting to ${profile.name}…`)
+    const session = await ensureSession(profile.id, tab.database)
+    if (get().message?.text.startsWith('Connecting to ')) set({ message: null })
+    return { profile, session }
   } catch (err) {
     if (!(isQsError(err) && err.kind === 'cancelled')) say(errorText(err), true)
     return null
@@ -597,25 +719,54 @@ async function sessionFor(tab: Tab): Promise<{ profile: Profile; session: Sessio
 /** Runs the selection, the statement under the cursor, or everything, in the front tab. */
 export async function runActive(mode: 'statement' | 'all') {
   const tab = activeTab()
-  if (!tab || tab.run?.status === 'running') return
+  if (!tab || busy(tab)) return
   const profile = profileById(tab.profileId)
   if (!profile) {
     say('Pick a database for this tab first.')
     openDialog({ kind: 'switcher' })
     return
   }
-  const text = await textToRun(tab, profile, mode)
+  let text: { script: string; offset: number } | null
+  try {
+    text = await textToRun(tab, profile, mode)
+  } catch (err) {
+    say(errorText(err), true)
+    return
+  }
   if (!text || text.script.trim() === '') return
-  await runScript(tab.id, text.script, text.offset, ROW_CAP)
+  const { script, offset } = text
+  unlessDraft(tab.id, 'run the query', () => void runScript(tab.id, script, offset, ROW_CAP))
 }
 
 /** Runs the front tab's last script again with no row cap. */
 export async function runAgainUncapped() {
   const tab = activeTab()
   const run = tab?.run
-  if (!tab || !run || run.status === 'running') return
-  await runScript(tab.id, run.script, run.offset, null)
+  if (!tab || !run || busy(tab)) return
+  unlessDraft(tab.id, 'run the query again', () => void runScript(tab.id, run.script, run.offset, null))
 }
+
+/**
+ * Each tab's current run, by a token made when it starts. Events from a run
+ * whose token is no longer the tab's (the tab closed, or ran again) are
+ * dropped, and their results closed.
+ */
+const runTokens = new Map<string, symbol>()
+
+/** Tabs whose run is connecting, before it shows as running. */
+const starting = new Set<string>()
+
+/** Whether a run in `tab` is starting (connecting) or going; says so if it is. */
+function busy(tab: Tab): boolean {
+  if (starting.has(tab.id) || tab.run?.status === 'running') {
+    say('A query is already running in this tab.')
+    return true
+  }
+  return false
+}
+
+/** Tabs whose grid had focus when a new run replaced it; the new grid takes focus. */
+export const refocusGrid = new Set<string>()
 
 async function runScript(
   tabId: string,
@@ -625,12 +776,18 @@ async function runScript(
   confirmed = false,
 ) {
   const tab = get().tabs.find((t) => t.id === tabId)
-  if (!tab) return
-  const target = await sessionFor(tab)
-  if (!target) return
+  if (!tab || busy(tab)) return
+  const token = Symbol(tabId)
+  runTokens.set(tabId, token)
+  const live = () => runTokens.get(tabId) === token
+  starting.add(tabId)
+  const target = await sessionFor(tab).finally(() => starting.delete(tabId))
+  if (!target || !live()) return
   const { profile, session } = target
-  if (tab.draft && draftSize(tab.draft) > 0) say('The unsaved changes to the last result were discarded.')
-  freeResults(tab)
+  // Kept until the server accepts the script: a schema change it asks about
+  // leaves these results in place if the user declines.
+  const previous = get().tabs.find((t) => t.id === tabId)?.run ?? null
+  if (document.activeElement?.closest('[role="grid"]')) refocusGrid.add(tabId)
   updateTab(tab.id, {
     view: 'results',
     draft: null,
@@ -650,7 +807,8 @@ async function runScript(
       errorAt: null,
     },
   })
-  set({ selection: null, message: null })
+  forgetRowSelection()
+  set({ message: null })
 
   try {
     const runId = await ipc.run(
@@ -658,6 +816,10 @@ async function runScript(
       script,
       rowCap,
       (event) => {
+        if (!live()) {
+          if (event.event === 'resultStarted') void ipc.closeResult(event.resultId).catch(() => {})
+          return
+        }
         switch (event.event) {
           case 'statementStarted':
             updateRun(tab.id, (r) => {
@@ -735,10 +897,17 @@ async function runScript(
       },
       { profileId: profile.id, database: tab.database ?? session.database, confirmed },
     )
+    if (previous) freeResults({ ...tab, run: previous })
+    if (!live()) {
+      // The tab closed while the run was starting.
+      void ipc.cancelRun(runId).catch(() => {})
+      return
+    }
     updateRun(tab.id, () => ({ runId }))
   } catch (err) {
+    refocusGrid.delete(tabId)
     if (isQsError(err) && err.kind === 'confirmationNeeded') {
-      updateTab(tab.id, { run: null })
+      updateTab(tab.id, { run: previous })
       openDialog({
         kind: 'confirmRun',
         message: err.message,
@@ -747,6 +916,7 @@ async function runScript(
       })
       return
     }
+    if (previous) freeResults({ ...tab, run: previous })
     updateRun(tab.id, () => ({ status: 'failed', error: isQsError(err) ? err : null }))
     if (!isQsError(err)) say(errorText(err), true)
   }
@@ -805,7 +975,13 @@ export async function explainActive() {
   if (!tab) return
   const target = await sessionFor(tab)
   if (!target) return
-  const text = await textToRun(tab, target.profile, 'statement')
+  let text: { script: string; offset: number } | null
+  try {
+    text = await textToRun(tab, target.profile, 'statement')
+  } catch (err) {
+    say(errorText(err), true)
+    return
+  }
   if (!text || text.script.trim() === '') return
   const sql = text.script
   updateTab(tab.id, { view: 'plan', plan: { status: 'loading', sql } })
@@ -824,7 +1000,7 @@ export async function explainActive() {
 export async function applyFilter(filter: string) {
   const tab = activeTab()
   const profile = profileById(tab?.profileId ?? null)
-  if (!tab?.table || !profile) return
+  if (!tab?.table || !profile || busy(tab)) return
   let sql: string
   try {
     sql = await ipc.filterQuery(profile.engine, tab.table.schema, tab.table.name, filter)
@@ -832,9 +1008,11 @@ export async function applyFilter(filter: string) {
     say(errorText(err), true)
     return
   }
-  updateTab(tab.id, { filter, sql, cursor: 0 })
-  persistTab({ ...tab, sql }, true)
-  await runScript(tab.id, sql, 0, ROW_CAP)
+  unlessDraft(tab.id, 'filter the rows', () => {
+    updateTab(tab.id, { filter, sql, cursor: 0 })
+    persistTab({ ...tab, sql }, true)
+    void runScript(tab.id, sql, 0, ROW_CAP)
+  })
 }
 
 // --- Editing ------------------------------------------------------------------
@@ -874,6 +1052,12 @@ export function draftEdits(draft: Draft): RowEdit[] {
 }
 
 function changeDraft(tabId: string, resultId: number, change: (draft: Draft) => Draft) {
+  const held = get().tabs.find((t) => t.id === tabId)?.draft
+  if (held && held.resultId !== resultId && draftSize(held) > 0) {
+    // One draft per tab: another statement's changes are waiting.
+    say('Save or discard the changes to the other result first.', true)
+    return
+  }
   updateTab(tabId, (t) => {
     const current =
       t.draft?.resultId === resultId ? t.draft : { resultId, updates: {}, deletes: [], inserts: [] }
@@ -930,14 +1114,40 @@ export function discardDraft(tabId: string) {
   updateTab(tabId, { draft: null })
 }
 
+/** Takes one reviewed change back out of the draft, and reviews what is left. */
+export async function dropEdit(tabId: string, edit: RowEdit, index: number) {
+  const draft = get().tabs.find((t) => t.id === tabId)?.draft
+  if (!draft) return
+  if (edit.kind === 'update') {
+    changeDraft(tabId, draft.resultId, (d) => {
+      const updates = { ...d.updates }
+      delete updates[edit.row]
+      return { ...d, updates }
+    })
+  } else if (edit.kind === 'delete') {
+    toggleDeleteRows(tabId, draft.resultId, [edit.row])
+  } else {
+    // Inserts come last, in draft order.
+    const first = draftEdits(draft).length - draft.inserts.length
+    removeInsert(tabId, draft.resultId, index - first)
+  }
+  await reviewDraft()
+}
+
 /** Shows the statements the front tab's draft would run, for review. */
 export async function reviewDraft() {
+  // A cell still being edited is kept first, so the review shows it.
+  document.querySelector<HTMLInputElement>('input[data-cell-editor]')?.blur()
   const tab = activeTab()
   const draft = tab?.draft
-  if (!tab || !draft) return
+  if (!tab || !draft) {
+    if (get().dialog?.kind === 'review') closeDialog()
+    return
+  }
   try {
-    const statements = await ipc.previewEdits(draft.resultId, draftEdits(draft))
-    openDialog({ kind: 'review', tabId: tab.id, statements, error: null, applying: false })
+    const edits = draftEdits(draft)
+    const statements = await ipc.previewEdits(draft.resultId, edits)
+    openDialog({ kind: 'review', tabId: tab.id, edits, statements, error: null, applying: false })
   } catch (err) {
     say(`Those changes cannot be saved: ${errorText(err)}`, true)
   }
@@ -952,10 +1162,11 @@ export async function applyDraft() {
   if (!tab || !draft) return
   set({ dialog: { ...dialog, applying: true, error: null } })
   try {
-    const ran = await ipc.applyEdits(draft.resultId, draftEdits(draft))
+    // Exactly what was reviewed, even if the draft changed behind the dialog.
+    const ran = await ipc.applyEdits(draft.resultId, dialog.edits)
     updateTab(tab.id, { draft: null })
     closeDialog()
-    say(`Saved ${ran.length} change${ran.length === 1 ? '' : 's'}.`)
+    const saved = `Saved ${ran.length} change${ran.length === 1 ? '' : 's'}.`
     const run = tab.run
     // Show the saved rows by running the query again, when it only reads.
     if (
@@ -964,6 +1175,9 @@ export async function applyDraft() {
       !run.script.trim().replace(/;\s*$/, '').includes(';')
     ) {
       await runScript(tab.id, run.script, run.offset, run.rowCap)
+      say(saved)
+    } else {
+      say(`${saved} Run the query again to see them.`)
     }
   } catch (err) {
     set({ dialog: { ...dialog, applying: false, error: errorText(err) } })

@@ -35,6 +35,16 @@ export function Modal({
           }`}
           style={{ width: `min(${width}px, calc(100vw - 32px))` }}
           onEscapeKeyDown={onEscape}
+          onOpenAutoFocus={(event) => {
+            // A control marked `autoFocus` takes focus instead of the first one.
+            const preferred = (event.currentTarget as HTMLElement | null)?.querySelector<HTMLElement>(
+              '[data-autofocus]',
+            )
+            if (preferred) {
+              event.preventDefault()
+              preferred.focus()
+            }
+          }}
         >
           <Dialog.Title className={top ? 'sr-only' : 'border-b border-border px-4 py-3 font-semibold'}>
             {title}
@@ -56,6 +66,7 @@ export function Button({
   title,
   className = '',
   small,
+  autoFocus,
 }: {
   children: ReactNode
   onClick?: () => void
@@ -66,10 +77,12 @@ export function Button({
   className?: string
   /** A compact button for toolbars. */
   small?: boolean
+  /** Takes focus when its dialog opens. */
+  autoFocus?: boolean
 }) {
   const look = {
     plain: 'border border-border bg-raised hover:bg-border/60',
-    primary: 'bg-accent text-white hover:brightness-110',
+    primary: 'bg-accent-solid text-white hover:brightness-110',
     danger: 'border border-border text-[#e5484d] hover:bg-[#e5484d]/10',
   }[kind]
   return (
@@ -78,19 +91,23 @@ export function Button({
       onClick={onClick}
       disabled={disabled}
       title={title}
-      className={`rounded disabled:opacity-50 ${small ? 'px-2 py-0.5 text-[12px]' : 'px-3 py-1'} ${look} ${className}`}
+      data-autofocus={autoFocus || undefined}
+      className={`shrink-0 rounded whitespace-nowrap disabled:opacity-50 ${small ? 'px-2 py-0.5 text-[12px]' : 'px-3 py-1'} ${look} ${className}`}
     >
       {children}
     </button>
   )
 }
 
-/** The connection's marker colour, or a hollow ring when it has none. */
+/**
+ * The connection's marker colour. Without one it is an empty space of the
+ * same size, so names still line up (a hollow ring read as "disconnected").
+ */
 export function ColorDot({ color, className = '' }: { color: Color | null | undefined; className?: string }) {
   return (
     <span
       aria-hidden
-      className={`inline-block size-2 shrink-0 rounded-full ${color ? '' : 'border border-muted'} ${className}`}
+      className={`inline-block size-2 shrink-0 rounded-full ${className}`}
       style={color ? { background: COLORS[color] } : undefined}
     />
   )

@@ -111,6 +111,8 @@ export function ConnectionForm({ profileId, pasteUrl }: { profileId: string | nu
   const [url, setUrl] = useState('')
   const [status, setStatus] = useState<{ text: string; ok: boolean } | null>(null)
   const [busy, setBusy] = useState(false)
+  /** The port as typed, while it is not a valid port. */
+  const [badPort, setBadPort] = useState<string | null>(null)
   const urlInput = useRef<HTMLInputElement>(null)
   const nameInput = useRef<HTMLInputElement>(null)
 
@@ -150,7 +152,25 @@ export function ConnectionForm({ profileId, pasteUrl }: { profileId: string | nu
     }
   }
 
+  /** What still has to be filled in, if anything; every field it names is on the Connection section. */
+  const problem = (): string | null => {
+    if (fields.name.trim() === '') return 'Give the connection a name.'
+    if (engine?.file && !fields.path?.trim()) return 'Choose the database file.'
+    if (!engine?.file && badPort !== null) return 'The port must be a number from 1 to 65535.'
+    if (authChoice === 'command' && (auth() as { program?: string }).program === '')
+      return 'Enter the command that prints the password.'
+    return null
+  }
+  const check = (): boolean => {
+    const text = problem()
+    if (text === null) return true
+    setSection('connection')
+    setStatus({ text, ok: false })
+    return false
+  }
+
   const test = async () => {
+    if (!check()) return
     setBusy(true)
     setStatus({ text: 'Connecting…', ok: true })
     try {
@@ -164,6 +184,7 @@ export function ConnectionForm({ profileId, pasteUrl }: { profileId: string | nu
   }
 
   const save = async () => {
+    if (!check()) return
     setBusy(true)
     try {
       const change: PasswordChange =
@@ -278,13 +299,20 @@ export function ConnectionForm({ profileId, pasteUrl }: { profileId: string | nu
                     <input
                       aria-label="Port"
                       inputMode="numeric"
-                      value={fields.port ?? ''}
+                      value={badPort ?? fields.port ?? ''}
+                      aria-invalid={badPort !== null}
                       onChange={(e) => {
-                        const n = Number.parseInt(e.target.value, 10)
-                        set('port', Number.isFinite(n) && n > 0 && n < 65536 ? n : null)
+                        const text = e.target.value.trim()
+                        const n = Number(text)
+                        if (text === '' || (Number.isInteger(n) && n > 0 && n < 65536)) {
+                          setBadPort(null)
+                          set('port', text === '' ? null : n)
+                        } else {
+                          setBadPort(e.target.value)
+                        }
                       }}
                       placeholder={String(engine?.port ?? '')}
-                      className={`${INPUT} w-20`}
+                      className={`${INPUT} w-20 aria-invalid:border-[#e5484d]`}
                     />
                   </div>
                   <Label htmlFor="cf-user">User</Label>
@@ -422,7 +450,7 @@ export function ConnectionForm({ profileId, pasteUrl }: { profileId: string | nu
               <Label>Colour</Label>
               <div className="flex items-center gap-1.5" role="radiogroup" aria-label="Colour">
                 <Swatch selected={fields.color === null} onClick={() => set('color', null)} label="No colour">
-                  <ColorDot color={null} className="size-3" />
+                  <ColorDot color={null} className="size-3 border border-muted" />
                 </Swatch>
                 {(Object.keys(COLORS) as Color[]).map((c) => (
                   <Swatch key={c} selected={fields.color === c} onClick={() => set('color', c)} label={c}>
@@ -460,7 +488,7 @@ export function ConnectionForm({ profileId, pasteUrl }: { profileId: string | nu
             Test
           </Button>
           <Button onClick={closeDialog}>Cancel</Button>
-          <Button kind="primary" type="submit" disabled={busy || fields.name.trim() === ''}>
+          <Button kind="primary" type="submit" disabled={busy}>
             Save
           </Button>
         </div>

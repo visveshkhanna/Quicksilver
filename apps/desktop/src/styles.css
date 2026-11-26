@@ -12,6 +12,8 @@
   --color-fg: #1b1f27;
   --color-muted: #646b7a;
   --color-accent: #3b6cf6;
+  /* Behind white text (primary buttons): dark enough to read in both themes. */
+  --color-accent-solid: #3b6cf6;
   --color-syntax-keyword: #8b3fd9;
   --color-syntax-string: #1f7a3d;
   --color-syntax-number: #b4561a;
@@ -30,6 +32,7 @@
     --color-fg: #e4e7ee;
     --color-muted: #8b93a3;
     --color-accent: #6b93ff;
+    --color-accent-solid: #3d68e0;
     --color-syntax-keyword: #c792ea;
     --color-syntax-string: #8bd49c;
     --color-syntax-number: #f0a86b;

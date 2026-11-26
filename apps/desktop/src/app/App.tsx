@@ -1,7 +1,7 @@
 import { Group, Panel, Separator, useDefaultLayout } from 'react-resizable-panels'
 import { ConnectionForm } from '../features/connections/ConnectionForm'
 import { PasswordPrompt } from '../features/connections/PasswordPrompt'
-import { ConfirmRun, InsertRow, ReviewChanges } from '../features/editing/EditDialogs'
+import { Confirm, ConfirmRun, InsertRow, ReviewChanges } from '../features/editing/EditDialogs'
 import { Inspector } from '../features/inspector/Inspector'
 import { Navigator } from '../features/navigator/Navigator'
 import { Shortcuts } from '../features/settings/Shortcuts'
@@ -64,6 +64,7 @@ export function App() {
       )}
       {dialog?.kind === 'review' && <ReviewChanges />}
       {dialog?.kind === 'confirmRun' && <ConfirmRun />}
+      {dialog?.kind === 'confirm' && <Confirm />}
       {dialog?.kind === 'insertRow' && <InsertRow />}
       <PasswordPrompt />
     </div>

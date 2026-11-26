@@ -16,6 +16,7 @@ describe('formatKeys', () => {
   it('uses symbols on macOS', () => {
     expect(formatKeys('Mod+Shift+P', 'mac')).toBe('⌘⇧P')
     expect(formatKeys('Mod+Enter', 'mac')).toBe('⌘↩')
+    expect(formatKeys('Mod+Shift+Backspace', 'mac')).toBe('⌘⇧⌫')
   })
 
   it('spells Mod as Ctrl elsewhere', () => {

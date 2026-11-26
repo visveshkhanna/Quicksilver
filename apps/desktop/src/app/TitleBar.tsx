@@ -16,7 +16,7 @@ export function TitleBar() {
       <nav aria-label="Current target" className="flex min-w-0 items-center gap-1.5 text-muted">
         {profile ? (
           <>
-            <ColorDot color={profile.color} />
+            {profile.color && <ColorDot color={profile.color} />}
             <span className="truncate text-fg">{profile.name}</span>
             <span aria-hidden>▸</span>
             <span className="truncate">{tab?.database ?? 'default database'}</span>

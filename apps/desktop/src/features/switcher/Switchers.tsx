@@ -6,12 +6,13 @@ import { COMMANDS } from '../../app/commands'
 import { KeyCaps } from '../../app/Kbd'
 import { ColorDot } from '../../app/ui'
 import { hasBinding, keysFor } from '../../keymap/keymap'
-import { selectFrom, type Target, targetKey } from '../../lib/target'
+import { type Target, targetKey } from '../../lib/target'
 import {
   activeTab,
   closeDialog,
   newTab,
   nodeKey,
+  openTable,
   profileById,
   retarget,
   type State,
@@ -152,11 +153,7 @@ export function GoToObject() {
         const o = objects.find((x) => `${x.database}\u0000${x.schema}\u0000${x.name}` === item.id)
         if (!o || !profile) return
         if (OPENABLE.has(o.kind)) {
-          newTab(
-            { profileId: profile.id, database: o.database },
-            selectFrom(profile.engine, o.schema, o.name),
-            { schema: o.schema, name: o.name },
-          )
+          void openTable({ profileId: profile.id, database: o.database }, o.schema, o.name)
         } else {
           select({
             kind: 'node',

@@ -3,6 +3,7 @@ import { Button } from '../../app/ui'
 import type { Engine } from '../../ipc/types'
 import { quoteIdent } from '../../lib/target'
 import {
+  type Draft,
   discardDraft,
   draftSize,
   openDialog,
@@ -102,10 +103,10 @@ function RunBody({ tab, engine }: { tab: Tab; engine: Engine | null }) {
   if (!run) {
     return (
       <div className="flex flex-1 items-center justify-center text-muted">
-        <span className="flex items-center gap-2">
+        <p className="m-0 px-4 text-center leading-7">
           Run a statement with <Kbd id="run-statement" />, everything with <Kbd id="run-all" />, or explain
           one with <Kbd id="explain-statement" />
-        </span>
+        </p>
       </div>
     )
   }
@@ -151,30 +152,56 @@ function EditBar({ tab, result }: { tab: Tab; result: ResultView }) {
     )
   }
   return (
-    <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border px-2 text-[12px]">
-      <span className="text-muted">
+    <div className="@container flex h-8 shrink-0 items-center gap-2 border-b border-border px-2 text-[12px]">
+      <span
+        className="min-w-0 truncate text-muted @max-[520px]:hidden"
+        title={`Rows are named by ${result.edit.byPrimaryKey ? 'their primary key' : 'every value, since the table has no primary key'}`}
+      >
         Editable · rows named by {result.edit.byPrimaryKey ? 'primary key' : 'every value (no primary key)'}
       </span>
-      <span className="ml-auto flex items-center gap-2">
+      <span className="ml-auto flex min-w-0 items-center gap-2">
         <Button small onClick={() => openDialog({ kind: 'insertRow', tabId: tab.id })}>
           Add row
         </Button>
         {changes > 0 && (
           <>
-            <span role="status" className="font-semibold text-[#b4561a]">
+            <span role="status" className="shrink-0 font-semibold text-[#b4561a]" title={breakdown(draft)}>
               {changes} unsaved change{changes === 1 ? '' : 's'}
             </span>
+            {/* New rows are not drawn in the grid, so say they are there. */}
+            {draft && draft.inserts.length > 0 && (
+              <span className="min-w-0 truncate text-muted @max-[640px]:hidden">({breakdown(draft)})</span>
+            )}
             <Button small onClick={() => discardDraft(tab.id)}>
               Discard
             </Button>
             <Button small kind="primary" onClick={() => void reviewDraft()}>
-              Review and save <Kbd id="review-changes" />
+              Review and save{' '}
+              <span className="@max-[560px]:hidden">
+                <Kbd id="review-changes" />
+              </span>
             </Button>
           </>
         )}
       </span>
     </div>
   )
+}
+
+/** What a draft holds, by kind: "2 edited rows, 1 new row". */
+function breakdown(draft: Draft | null): string {
+  if (!draft) return ''
+  const deleted = new Set(draft.deletes)
+  const edited = Object.keys(draft.updates).filter((r) => !deleted.has(Number(r))).length
+  const parts: [number, string, string][] = [
+    [edited, 'edited row', 'edited rows'],
+    [draft.deletes.length, 'row to delete', 'rows to delete'],
+    [draft.inserts.length, 'new row', 'new rows'],
+  ]
+  return parts
+    .filter(([n]) => n > 0)
+    .map(([n, one, many]) => `${n} ${n === 1 ? one : many}`)
+    .join(', ')
 }
 
 /** The table name an INSERT copy uses: the tab's table, or a placeholder to replace. */

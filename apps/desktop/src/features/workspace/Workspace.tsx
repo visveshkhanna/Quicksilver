@@ -133,7 +133,7 @@ function TabBody({ tab }: { tab: Tab }) {
           className="flex min-w-0 items-center gap-1.5 rounded border border-border px-2 py-0.5 hover:bg-raised"
           title="Switch database"
         >
-          <ColorDot color={profile?.color} />
+          {profile?.color && <ColorDot color={profile.color} />}
           <span className="truncate">
             {profile ? `${profile.name} / ${tab.database ?? 'default database'}` : 'Choose a database…'}
           </span>

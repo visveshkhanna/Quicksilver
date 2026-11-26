@@ -63,6 +63,7 @@ export const GRID_FIXED_KEYS = [
   ['Mod+Up Mod+Down', 'First or last row'],
   ['Home End', 'First or last column'],
   ['F2', 'Edit the cell'],
+  ['Any character', 'Replace the cell’s value, starting with what was typed'],
   ['Enter Tab Escape', 'While editing: keep the value and move down or right, or cancel'],
 ] as const
 
@@ -85,6 +86,14 @@ const MAC_SYMBOLS: Record<string, string> = {
   Alt: '⌥',
   Ctrl: '⌃',
   Enter: '↩',
+  Backspace: '⌫',
+  Delete: '⌦',
+  Escape: '⎋',
+  Tab: '⇥',
+  ArrowUp: '↑',
+  ArrowDown: '↓',
+  ArrowLeft: '←',
+  ArrowRight: '→',
 }
 
 /** Formats a binding the way the platform writes shortcuts: `⌘⇧P` or `Ctrl+Shift+P`. */

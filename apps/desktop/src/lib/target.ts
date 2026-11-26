@@ -24,18 +24,6 @@ export function quoteIdent(name: string, engine: Engine): string {
   return `"${name.replaceAll('"', '""')}"`
 }
 
-/**
- * A starting query for an object, put in the editor for the user to read and
- * run. It is never run on its own.
- */
-export function selectFrom(engine: Engine, schema: string | null, name: string): string {
-  const qualified =
-    schema && !(engine === 'sqlite' && schema === 'main')
-      ? `${quoteIdent(schema, engine)}.${quoteIdent(name, engine)}`
-      : quoteIdent(name, engine)
-  return `SELECT * FROM ${qualified};\n`
-}
-
 /** The fixed connection colours, as CSS colours. */
 export const COLORS = {
   red: '#e5484d',

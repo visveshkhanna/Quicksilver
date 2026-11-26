@@ -91,6 +91,15 @@ describe('editing cells', () => {
     await waitFor(() => expect(backend.called('run').length).toBe(runs + 1))
   })
 
+  it('typing on a cell replaces its value', async () => {
+    const { user } = await editable()
+    await user.keyboard('{ArrowDown}{ArrowRight}q')
+    const input = await screen.findByRole('textbox', { name: 'New value for name' })
+    expect((input as HTMLInputElement).value).toBe('q')
+    await user.keyboard('rs{Enter}')
+    await waitFor(() => expect(tab().draft?.updates).toEqual({ 0: { 1: 'qrs' } }))
+  })
+
   it('Escape cancels an edit and setting a value back forgets it', async () => {
     const { user } = await editable()
     await user.keyboard('{ArrowDown}{ArrowRight}{Enter}')
@@ -166,6 +175,64 @@ describe('editing cells', () => {
   })
 })
 
+describe('unsaved changes', () => {
+  /** Edits the name in the first row, leaving the grid focused. */
+  async function withChange() {
+    const started = await editable()
+    await started.user.keyboard('{ArrowDown}{ArrowRight}{Enter}{Control>}a{/Control}zed{Enter}')
+    await waitFor(() => expect(tab().draft).not.toBeNull())
+    return started
+  }
+
+  it('asks before a run throws them away', async () => {
+    const { user, backend } = await withChange()
+    const runs = backend.called('run').length
+    await user.keyboard('{Control>}{Enter}{/Control}')
+    const ask = await screen.findByRole('dialog', { name: 'Discard unsaved changes?' })
+    await user.click(within(ask).getByRole('button', { name: 'Cancel' }))
+    expect(tab().draft).not.toBeNull()
+    expect(backend.called('run')).toHaveLength(runs)
+
+    await user.keyboard('{Control>}{Enter}{/Control}')
+    await user.click(await screen.findByRole('button', { name: 'Discard changes' }))
+    await waitFor(() => expect(backend.called('run')).toHaveLength(runs + 1))
+    expect(tab().draft).toBeNull()
+  })
+
+  it('asks before the tab closes', async () => {
+    const { user } = await withChange()
+    const id = tab().id
+    await user.keyboard('{Control>}w{/Control}')
+    const ask = await screen.findByRole('dialog', { name: 'Discard unsaved changes?' })
+    await user.click(within(ask).getByRole('button', { name: 'Cancel' }))
+    expect(useApp.getState().tabs.some((t) => t.id === id)).toBe(true)
+  })
+
+  it('reviews the cell still being edited, and can take one change back out', async () => {
+    const { user, backend } = await withChange()
+    // Mark row 2 for deletion, then start editing row 3 and save mid-edit.
+    await user.keyboard(
+      '{Control>}{Backspace}{/Control}{ArrowDown}{Enter}{Control>}a{/Control}new{Control>}s{/Control}',
+    )
+    const review = await screen.findByRole('dialog', { name: 'Review changes' })
+    expect(backend.called('preview_edits').at(-1)?.args.edits).toEqual([
+      { kind: 'update', row: 0, set: [{ column: 1, value: 'zed' }] },
+      { kind: 'update', row: 2, set: [{ column: 1, value: 'new' }] },
+      { kind: 'delete', row: 1 },
+    ])
+    await user.click(within(review).getAllByRole('button', { name: 'Undo' })[2] as HTMLElement)
+    await waitFor(() =>
+      expect(backend.called('preview_edits').at(-1)?.args.edits).toEqual([
+        { kind: 'update', row: 0, set: [{ column: 1, value: 'zed' }] },
+        { kind: 'update', row: 2, set: [{ column: 1, value: 'new' }] },
+      ]),
+    )
+    await user.click(within(review).getByRole('button', { name: 'Save in one transaction' }))
+    await waitFor(() => expect(backend.called('apply_edits')).toHaveLength(1))
+    expect(backend.called('apply_edits')[0]?.args.edits).toHaveLength(2)
+  })
+})
+
 describe('connection modes', () => {
   it('asks before a script that changes the schema and runs it once confirmed', async () => {
     const { user, backend } = await start('create table x (a int)')
@@ -176,13 +243,21 @@ describe('connection modes', () => {
     await waitFor(() => expect(backend.called('run').at(-1)?.args.confirmed).toBe(true))
   })
 
-  it('does not run when the question is declined', async () => {
-    const { user, backend } = await start('drop table x')
+  it('does not run when the question is declined, and keeps the last results', async () => {
+    const { user, backend } = await start()
+    await screen.findByRole('grid', { name: 'Result rows' })
+    const view = editorFor(tab().id)
+    act(() => {
+      view?.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: 'drop table x' } })
+    })
+    await user.keyboard('{Control>}{Enter}{/Control}')
     const confirm = await screen.findByRole('dialog', { name: 'Change the schema?' })
     const runs = backend.called('run').length
     await user.click(within(confirm).getByRole('button', { name: 'Don’t run' }))
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(backend.called('run')).toHaveLength(runs)
+    expect(screen.getByRole('grid', { name: 'Result rows' })).toBeTruthy()
+    expect(backend.called('close_result')).toHaveLength(0)
   })
 })
 
@@ -193,10 +268,14 @@ describe('the filter bar', () => {
     await user.type(await screen.findByRole('combobox', { name: 'Go to object' }), 'orders')
     await user.keyboard('{Enter}')
     const filter = await screen.findByRole('textbox', { name: 'Filter rows' })
+    // Opening the table built its query in Rust and ran it.
+    const opened = 'SELECT * FROM "sales"."orders";\n'
+    await waitFor(() => expect(backend.called('run').at(-1)?.args.script).toBe(opened))
+    expect(backend.called('filter_query')).toHaveLength(1)
     act(() => filter.focus())
     await user.keyboard('1 = 1; delete from orders{Enter}')
-    await waitFor(() => expect(backend.called('filter_query')).toHaveLength(1))
+    await waitFor(() => expect(backend.called('filter_query')).toHaveLength(2))
     expect(await screen.findByText(/That filter cannot be used/)).toBeTruthy()
-    expect(backend.called('run').at(-1)?.args.script).toBe('select * from people')
+    expect(backend.called('run').at(-1)?.args.script).toBe(opened)
   })
 })

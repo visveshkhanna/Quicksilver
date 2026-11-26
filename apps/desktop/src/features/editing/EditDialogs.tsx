@@ -4,9 +4,9 @@
 
 import { useState } from 'react'
 import { Button, Modal } from '../../app/ui'
-import { addInsert, applyDraft, closeDialog, useApp } from '../../state/app'
+import { addInsert, applyDraft, closeDialog, dropEdit, useApp } from '../../state/app'
 
-function StatementList({ statements }: { statements: string[] }) {
+function StatementList({ statements, onDrop }: { statements: string[]; onDrop?: (index: number) => void }) {
   return (
     <ol className="m-0 max-h-[50vh] list-none overflow-auto p-0 font-mono text-[12px]">
       {statements.map((sql, i) => (
@@ -14,6 +14,16 @@ function StatementList({ statements }: { statements: string[] }) {
         <li key={i} className="flex gap-2 border-b border-border/60 px-1 py-1.5 last:border-0">
           <span className="w-6 shrink-0 text-right text-muted">{i + 1}</span>
           <code className="min-w-0 flex-1 break-all whitespace-pre-wrap select-text">{sql};</code>
+          {onDrop && (
+            <button
+              type="button"
+              onClick={() => onDrop(i)}
+              title="Take this change out; the rest stay"
+              className="shrink-0 self-start rounded px-1.5 font-sans text-[11px] text-muted hover:bg-raised hover:text-fg"
+            >
+              Undo
+            </button>
+          )}
         </li>
       ))}
     </ol>
@@ -32,7 +42,17 @@ export function ReviewChanges() {
           {n} statement{n === 1 ? '' : 's'} will run in one transaction. If any of them changes anything other
           than exactly one row, all of them are undone and nothing is saved.
         </p>
-        <StatementList statements={dialog.statements} />
+        <StatementList
+          statements={dialog.statements}
+          onDrop={
+            dialog.applying
+              ? undefined
+              : (i) => {
+                  const edit = dialog.edits[i]
+                  if (edit) void dropEdit(dialog.tabId, edit, i)
+                }
+          }
+        />
         {dialog.error && (
           <p
             role="alert"
@@ -42,7 +62,9 @@ export function ReviewChanges() {
           </p>
         )}
         <div className="flex justify-end gap-2">
-          <Button onClick={closeDialog}>Back to editing</Button>
+          <Button onClick={closeDialog} autoFocus>
+            Back to editing
+          </Button>
           <Button kind="primary" onClick={() => void applyDraft()} disabled={dialog.applying}>
             {dialog.applying ? 'Saving…' : 'Save in one transaction'}
           </Button>
@@ -147,6 +169,31 @@ export function InsertRow() {
           </Button>
         </div>
       </form>
+    </Modal>
+  )
+}
+
+/** A yes-or-no question before something that cannot be taken back. */
+export function Confirm() {
+  const dialog = useApp((s) => (s.dialog?.kind === 'confirm' ? s.dialog : null))
+  if (!dialog) return null
+  return (
+    <Modal title={dialog.title} onClose={closeDialog} width={480}>
+      <div className="flex flex-col gap-3 p-4">
+        <p className="m-0">{dialog.message}</p>
+        <div className="flex justify-end gap-2">
+          <Button onClick={closeDialog}>Cancel</Button>
+          <Button
+            kind="danger"
+            onClick={() => {
+              closeDialog()
+              dialog.run()
+            }}
+          >
+            {dialog.confirmLabel}
+          </Button>
+        </div>
+      </div>
     </Modal>
   )
 }
