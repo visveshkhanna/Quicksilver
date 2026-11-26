@@ -52,7 +52,7 @@ export const PEOPLE: { columns: Column[]; rows: (string | null)[][] } = {
   ],
 }
 
-type Result = { columns: Column[]; rows: (string | null)[][]; order: number[] }
+type Result = { columns: Column[]; rows: (string | null)[][]; order: number[]; script: string }
 
 export type Call = { cmd: string; args: Record<string, unknown> }
 
@@ -189,6 +189,14 @@ export function fakeBackend({
         const script = args.script as string
         const cap = args.rowCap as number | null
         const runId = nextId++
+        // A read-write connection asks before a schema change.
+        if (/\b(create|drop|alter)\b/i.test(script) && !args.confirmed) {
+          throw {
+            kind: 'confirmationNeeded',
+            message: '1 statement may change the schema; run it anyway?',
+            statements: [script.trim()],
+          }
+        }
         setTimeout(() => {
           send({ event: 'statementStarted', index: 0, span: { start: 0, end: script.length } })
           if (/error/i.test(script)) {
@@ -210,7 +218,7 @@ export function fakeBackend({
           const rows = many
             ? Array.from({ length: cap ?? 250_000 }, (_, i) => [String(i + 1), `row ${i + 1}`])
             : PEOPLE.rows
-          results.set(resultId, { columns: PEOPLE.columns, rows, order: rows.map((_, i) => i) })
+          results.set(resultId, { columns: PEOPLE.columns, rows, order: rows.map((_, i) => i), script })
           send({ event: 'resultStarted', index: 0, resultId, columns: PEOPLE.columns })
           send({
             event: 'statementFinished',
@@ -265,6 +273,40 @@ export function fakeBackend({
           .map((i) => columns.map((c) => r?.rows[i]?.[c] ?? '').join('\t'))
         if (format.header) lines.unshift(columns.map((c) => r?.columns[c]?.name).join('\t'))
         return `${lines.join('\n')}\n`
+      }
+      case 'edit_target': {
+        const r = results.get(args.result as number)
+        return /computed/i.test(r?.script ?? '')
+          ? {
+              reason: 'a column is computed, not read from a table',
+              schema: null,
+              table: null,
+              byPrimaryKey: false,
+              key: [],
+            }
+          : { reason: null, schema: 'public', table: 'people', byPrimaryKey: true, key: [0] }
+      }
+      case 'preview_edits':
+      case 'apply_edits':
+        return (args.edits as { kind: string; row?: number }[]).map(
+          (e) => `${e.kind.toUpperCase()} row ${e.row ?? 'new'}`,
+        )
+      case 'filter_query': {
+        const filter = (args.filter as string).trim()
+        if (filter.includes(';'))
+          throw {
+            kind: 'query',
+            message: 'That filter cannot be used: exactly one statement is allowed',
+            code: null,
+            position: null,
+            detail: null,
+          }
+        const name = `"${args.schema}"."${args.table}"`
+        return filter === ''
+          ? `SELECT * FROM ${name};\n`
+          : /^order\s+by/i.test(filter)
+            ? `SELECT * FROM ${name} ${filter};\n`
+            : `SELECT * FROM ${name} WHERE ${filter};\n`
       }
       case 'explain':
         return {

@@ -5,11 +5,13 @@ import type {
   ColumnInfo,
   CopyFormat,
   DbObject,
+  EditTarget,
   Engine,
   ForeignKey,
   ObjectKind,
   Plan,
   ResultInfo,
+  RowEdit,
   RunEvent,
   SessionInfo,
   SortDirection,
@@ -39,8 +41,11 @@ export function disconnect(session: number): Promise<void> {
   return invoke('disconnect', { session })
 }
 
-/** Where a run came from, for its history entry. */
-export type RunContext = { profileId: string | null; database: string | null }
+/**
+ * Where a run came from, for its history entry, and whether the user has
+ * confirmed statements that change the schema.
+ */
+export type RunContext = { profileId: string | null; database: string | null; confirmed?: boolean }
 
 /**
  * Starts a script; `onEvent` receives every `RunEvent`. Resolves to the run
@@ -55,7 +60,15 @@ export function run(
 ): Promise<number> {
   const channel = new Channel<RunEvent>()
   channel.onmessage = onEvent
-  return invoke('run', { session, script, rowCap, ...context, onEvent: channel })
+  return invoke('run', {
+    session,
+    script,
+    rowCap,
+    profileId: context.profileId,
+    database: context.database,
+    confirmed: context.confirmed ?? false,
+    onEvent: channel,
+  })
 }
 
 export function cancelRun(run: number): Promise<void> {
@@ -125,4 +138,29 @@ export function explain(session: number, statement: string): Promise<Plan> {
 /** The SQL that creates an object. */
 export function objectDdl(session: number, schema: string, name: string, kind: ObjectKind): Promise<string> {
   return invoke('object_ddl', { session, schema, name, kind })
+}
+
+/** Whether a result's rows can be edited, and how rows are named. */
+export function editTarget(result: number): Promise<EditTarget> {
+  return invoke('edit_target', { result })
+}
+
+/** The statements `edits` would run, each checked by its gate; runs nothing. */
+export function previewEdits(result: number, edits: RowEdit[]): Promise<string[]> {
+  return invoke('preview_edits', { result, edits })
+}
+
+/** Runs `edits` in one transaction; nothing is saved unless each changes exactly one row. */
+export function applyEdits(result: number, edits: RowEdit[]): Promise<string[]> {
+  return invoke('apply_edits', { result, edits })
+}
+
+/** The filter bar's query, built and checked by the filter gate in Rust. */
+export function filterQuery(
+  engine: Engine,
+  schema: string | null,
+  table: string,
+  filter: string,
+): Promise<string> {
+  return invoke('filter_query', { engine, schema, table, filter })
 }

@@ -9,7 +9,9 @@ import {
   activeTab,
   cancelActive,
   closeTab,
+  discardDraft,
   disconnectProfile,
+  draftSize,
   errorText,
   explainActive,
   newTab,
@@ -17,6 +19,7 @@ import {
   profileById,
   reloadCatalog,
   reopenTab,
+  reviewDraft,
   runActive,
   type State,
   say,
@@ -108,6 +111,21 @@ export const COMMANDS: readonly Command[] = [
       formatIn(tab.id, profileById(tab.profileId)?.engine ?? null).catch((err) =>
         say(`Could not format: ${errorText(err)}`, true),
       )
+    },
+  },
+  {
+    id: 'review-changes',
+    title: 'Review and save the changes to the rows',
+    enabled: (s) => draftSize(activeTab(s)?.draft ?? null) > 0,
+    run: () => void reviewDraft(),
+  },
+  {
+    id: 'discard-changes',
+    title: 'Discard the unsaved changes to the rows',
+    enabled: (s) => draftSize(activeTab(s)?.draft ?? null) > 0,
+    run: () => {
+      const tab = activeTab()
+      if (tab) discardDraft(tab.id)
     },
   },
   {

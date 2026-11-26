@@ -1,7 +1,19 @@
 import { Kbd } from '../../app/Kbd'
+import { Button } from '../../app/ui'
 import type { Engine } from '../../ipc/types'
 import { quoteIdent } from '../../lib/target'
-import { type RunState, runAgainUncapped, setView, showResult, type Tab } from '../../state/app'
+import {
+  discardDraft,
+  draftSize,
+  openDialog,
+  type ResultView,
+  type RunState,
+  reviewDraft,
+  runAgainUncapped,
+  setView,
+  showResult,
+  type Tab,
+} from '../../state/app'
 import { Grid } from '../grid/Grid'
 import { PlanView } from './PlanView'
 
@@ -102,6 +114,7 @@ function RunBody({ tab, engine }: { tab: Tab; engine: Engine | null }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {run.error && <ErrorBox run={run} />}
+      {result && <EditBar tab={tab} result={result} />}
       {result ? (
         <Grid key={result.resultId} tabId={tab.id} result={result} insertTable={insertTarget(tab, engine)} />
       ) : (
@@ -118,6 +131,48 @@ function RunBody({ tab, engine }: { tab: Tab; engine: Engine | null }) {
         )
       )}
       {!result && run.status === 'running' && <p className="px-3 py-2 text-muted">Running…</p>}
+    </div>
+  )
+}
+
+/** Whether the rows can be edited, and the unsaved changes to them. */
+function EditBar({ tab, result }: { tab: Tab; result: ResultView }) {
+  const draft = tab.draft?.resultId === result.resultId ? tab.draft : null
+  const changes = draftSize(draft)
+  if (!result.edit) return null
+  if (result.edit.reason) {
+    return (
+      <p
+        className="m-0 shrink-0 truncate border-b border-border px-2 py-1 text-[11px] text-muted"
+        title={result.edit.reason}
+      >
+        Read only: {result.edit.reason}.
+      </p>
+    )
+  }
+  return (
+    <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border px-2 text-[12px]">
+      <span className="text-muted">
+        Editable · rows named by {result.edit.byPrimaryKey ? 'primary key' : 'every value (no primary key)'}
+      </span>
+      <span className="ml-auto flex items-center gap-2">
+        <Button small onClick={() => openDialog({ kind: 'insertRow', tabId: tab.id })}>
+          Add row
+        </Button>
+        {changes > 0 && (
+          <>
+            <span role="status" className="font-semibold text-[#b4561a]">
+              {changes} unsaved change{changes === 1 ? '' : 's'}
+            </span>
+            <Button small onClick={() => discardDraft(tab.id)}>
+              Discard
+            </Button>
+            <Button small kind="primary" onClick={() => void reviewDraft()}>
+              Review and save <Kbd id="review-changes" />
+            </Button>
+          </>
+        )}
+      </span>
     </div>
   )
 }

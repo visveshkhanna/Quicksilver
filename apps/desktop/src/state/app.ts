@@ -10,14 +10,16 @@ import type {
   Column,
   ColumnInfo,
   DbObject,
+  EditTarget,
   Plan,
   QsError,
+  RowEdit,
   SessionInfo,
   SortDirection,
   StatementOutcome,
 } from '../ipc/types'
 import type { Overrides } from '../keymap/keymap'
-import { quoteIdent, type Target, targetKey } from '../lib/target'
+import { type Target, targetKey } from '../lib/target'
 
 /**
  * How many rows a run keeps per statement. Rows past it are not read; the
@@ -38,6 +40,22 @@ export type ResultView = {
   sort: { column: number; direction: SortDirection } | null
   /** Bumped whenever the rows' order changes, so the grid refetches. */
   version: number
+  /** Whether the rows can be edited, once known. */
+  edit: EditTarget | null
+}
+
+/**
+ * Changes not yet saved, for one result. Rows are named by source row (their
+ * place in arrival order), so sorting never moves an edit to another row.
+ */
+export type Draft = {
+  resultId: number
+  /** Source row → result column → new value (`null` is NULL). */
+  updates: Record<number, Record<number, string | null>>
+  /** Source rows to delete. */
+  deletes: number[]
+  /** New rows: result column → value; columns left out take their defaults. */
+  inserts: Record<number, string | null>[]
 }
 
 export type RunState = {
@@ -83,6 +101,7 @@ export type Tab = {
   /** Set when the tab was opened on a table; enables the filter bar. */
   table: TableSource | null
   filter: string
+  draft: Draft | null
 }
 
 export type Dialog =
@@ -92,6 +111,9 @@ export type Dialog =
   | { kind: 'palette' }
   | { kind: 'shortcuts' }
   | { kind: 'connection'; profileId: string | null; pasteUrl?: boolean }
+  | { kind: 'confirmRun'; message: string; statements: string[]; run: () => void }
+  | { kind: 'review'; tabId: string; statements: string[]; error: string | null; applying: boolean }
+  | { kind: 'insertRow'; tabId: string }
 
 export type PasswordRequest = {
   profile: Profile
@@ -372,6 +394,7 @@ const blankTab: Omit<Tab, 'id' | 'title'> = {
   view: 'results',
   table: null,
   filter: '',
+  draft: null,
 }
 
 export function activeTab(state: State = get()): Tab | undefined {
@@ -594,15 +617,23 @@ export async function runAgainUncapped() {
   await runScript(tab.id, run.script, run.offset, null)
 }
 
-async function runScript(tabId: string, script: string, offset: number, rowCap: number | null) {
+async function runScript(
+  tabId: string,
+  script: string,
+  offset: number,
+  rowCap: number | null,
+  confirmed = false,
+) {
   const tab = get().tabs.find((t) => t.id === tabId)
   if (!tab) return
   const target = await sessionFor(tab)
   if (!target) return
   const { profile, session } = target
+  if (tab.draft && draftSize(tab.draft) > 0) say('The unsaved changes to the last result were discarded.')
   freeResults(tab)
   updateTab(tab.id, {
     view: 'results',
+    draft: null,
     run: {
       status: 'running',
       runId: null,
@@ -647,6 +678,7 @@ async function runScript(tabId: string, script: string, offset: number, rowCap: 
                   done: false,
                   sort: null,
                   version: 0,
+                  edit: null,
                 },
               ],
               // Follow the newest result while the run is going.
@@ -678,6 +710,7 @@ async function runScript(tabId: string, script: string, offset: number, rowCap: 
               results: r.results.map((res) => ({ ...res, done: true })),
             }))
             void refreshCounts(tab.id)
+            void loadEditTargets(tab.id)
             break
           case 'failed':
             updateRun(tab.id, (r) => {
@@ -696,13 +729,24 @@ async function runScript(tabId: string, script: string, offset: number, rowCap: 
               }
             })
             void refreshCounts(tab.id)
+            void loadEditTargets(tab.id)
             break
         }
       },
-      { profileId: profile.id, database: tab.database ?? session.database },
+      { profileId: profile.id, database: tab.database ?? session.database, confirmed },
     )
     updateRun(tab.id, () => ({ runId }))
   } catch (err) {
+    if (isQsError(err) && err.kind === 'confirmationNeeded') {
+      updateTab(tab.id, { run: null })
+      openDialog({
+        kind: 'confirmRun',
+        message: err.message,
+        statements: err.statements,
+        run: () => void runScript(tabId, script, offset, rowCap, true),
+      })
+      return
+    }
     updateRun(tab.id, () => ({ status: 'failed', error: isQsError(err) ? err : null }))
     if (!isQsError(err)) say(errorText(err), true)
   }
@@ -774,33 +818,156 @@ export async function explainActive() {
 }
 
 /**
- * The query a table tab's filter bar runs: everything from the table, with
- * `filter` as its WHERE clause (or ORDER BY, LIMIT…, when it starts with one).
- */
-export function filteredQuery(engine: Profile['engine'], table: TableSource, filter: string): string {
-  const name =
-    table.schema && !(engine === 'sqlite' && table.schema === 'main')
-      ? `${quoteIdent(table.schema, engine)}.${quoteIdent(table.name, engine)}`
-      : quoteIdent(table.name, engine)
-  const condition = filter.trim().replace(/;+\s*$/, '')
-  if (condition === '') return `SELECT * FROM ${name};\n`
-  const clause = /^(order\s+by|limit|offset|group\s+by|where)\b/i.test(condition)
-    ? condition
-    : `WHERE ${condition}`
-  return `SELECT * FROM ${name} ${clause};\n`
-}
-
-/**
- * Puts the filtered query in the editor, where it can be read, and runs it.
+ * Builds the filter bar's query in Rust, where the filter gate checks it,
+ * puts it in the editor where it can be read, and runs it.
  */
 export async function applyFilter(filter: string) {
   const tab = activeTab()
   const profile = profileById(tab?.profileId ?? null)
   if (!tab?.table || !profile) return
-  const sql = filteredQuery(profile.engine, tab.table, filter)
+  let sql: string
+  try {
+    sql = await ipc.filterQuery(profile.engine, tab.table.schema, tab.table.name, filter)
+  } catch (err) {
+    say(errorText(err), true)
+    return
+  }
   updateTab(tab.id, { filter, sql, cursor: 0 })
   persistTab({ ...tab, sql }, true)
   await runScript(tab.id, sql, 0, ROW_CAP)
+}
+
+// --- Editing ------------------------------------------------------------------
+
+async function loadEditTargets(tabId: string) {
+  for (const r of currentRun(tabId)?.results ?? []) {
+    try {
+      const edit = await ipc.editTarget(r.resultId)
+      updateResult(tabId, r.resultId, () => ({ edit }))
+    } catch (err) {
+      updateResult(tabId, r.resultId, () => ({
+        edit: { reason: errorText(err), schema: null, table: null, byPrimaryKey: false, key: [] },
+      }))
+    }
+  }
+}
+
+export function draftSize(draft: Draft | null): number {
+  if (!draft) return 0
+  const deleted = new Set(draft.deletes)
+  const updated = Object.keys(draft.updates).filter((row) => !deleted.has(Number(row))).length
+  return updated + draft.deletes.length + draft.inserts.length
+}
+
+/** The draft as the edits the service takes: updates, then deletes, then inserts. */
+export function draftEdits(draft: Draft): RowEdit[] {
+  const deleted = new Set(draft.deletes)
+  const toValues = (cells: Record<number, string | null>) =>
+    Object.entries(cells).map(([column, value]) => ({ column: Number(column), value }))
+  return [
+    ...Object.entries(draft.updates)
+      .filter(([row]) => !deleted.has(Number(row)))
+      .map(([row, cells]): RowEdit => ({ kind: 'update', row: Number(row), set: toValues(cells) })),
+    ...draft.deletes.map((row): RowEdit => ({ kind: 'delete', row })),
+    ...draft.inserts.map((values): RowEdit => ({ kind: 'insert', values: toValues(values) })),
+  ]
+}
+
+function changeDraft(tabId: string, resultId: number, change: (draft: Draft) => Draft) {
+  updateTab(tabId, (t) => {
+    const current =
+      t.draft?.resultId === resultId ? t.draft : { resultId, updates: {}, deletes: [], inserts: [] }
+    const next = change(current)
+    return { draft: draftSize(next) === 0 ? null : next }
+  })
+}
+
+/** Records a new value for a cell; setting it back to `original` forgets the edit. */
+export function setCell(
+  tabId: string,
+  resultId: number,
+  row: number,
+  column: number,
+  value: string | null,
+  original: string | null,
+) {
+  changeDraft(tabId, resultId, (draft) => {
+    const cells = { ...(draft.updates[row] ?? {}) }
+    if (value === original) delete cells[column]
+    else cells[column] = value
+    const updates = { ...draft.updates }
+    if (Object.keys(cells).length === 0) delete updates[row]
+    else updates[row] = cells
+    return { ...draft, updates }
+  })
+}
+
+/** Marks rows for deletion, or unmarks them if they all are. */
+export function toggleDeleteRows(tabId: string, resultId: number, rows: number[]) {
+  changeDraft(tabId, resultId, (draft) => {
+    const marked = new Set(draft.deletes)
+    const all = rows.every((r) => marked.has(r))
+    for (const r of rows) {
+      if (all) marked.delete(r)
+      else marked.add(r)
+    }
+    return { ...draft, deletes: [...marked].sort((a, b) => a - b) }
+  })
+}
+
+export function addInsert(tabId: string, resultId: number, values: Record<number, string | null>) {
+  changeDraft(tabId, resultId, (draft) => ({ ...draft, inserts: [...draft.inserts, values] }))
+}
+
+export function removeInsert(tabId: string, resultId: number, index: number) {
+  changeDraft(tabId, resultId, (draft) => ({
+    ...draft,
+    inserts: draft.inserts.filter((_, i) => i !== index),
+  }))
+}
+
+export function discardDraft(tabId: string) {
+  updateTab(tabId, { draft: null })
+}
+
+/** Shows the statements the front tab's draft would run, for review. */
+export async function reviewDraft() {
+  const tab = activeTab()
+  const draft = tab?.draft
+  if (!tab || !draft) return
+  try {
+    const statements = await ipc.previewEdits(draft.resultId, draftEdits(draft))
+    openDialog({ kind: 'review', tabId: tab.id, statements, error: null, applying: false })
+  } catch (err) {
+    say(`Those changes cannot be saved: ${errorText(err)}`, true)
+  }
+}
+
+/** Saves the reviewed draft in one transaction, then shows the rows again. */
+export async function applyDraft() {
+  const dialog = get().dialog
+  if (dialog?.kind !== 'review') return
+  const tab = get().tabs.find((t) => t.id === dialog.tabId)
+  const draft = tab?.draft
+  if (!tab || !draft) return
+  set({ dialog: { ...dialog, applying: true, error: null } })
+  try {
+    const ran = await ipc.applyEdits(draft.resultId, draftEdits(draft))
+    updateTab(tab.id, { draft: null })
+    closeDialog()
+    say(`Saved ${ran.length} change${ran.length === 1 ? '' : 's'}.`)
+    const run = tab.run
+    // Show the saved rows by running the query again, when it only reads.
+    if (
+      run &&
+      /^\s*(select|table|values)\b/i.test(run.script) &&
+      !run.script.trim().replace(/;\s*$/, '').includes(';')
+    ) {
+      await runScript(tab.id, run.script, run.offset, run.rowCap)
+    }
+  } catch (err) {
+    set({ dialog: { ...dialog, applying: false, error: errorText(err) } })
+  }
 }
 
 // --- Navigator ----------------------------------------------------------------

@@ -36,6 +36,7 @@ export const BINDINGS: readonly Binding[] = [
   { id: 'explain-statement', keys: 'Mod+E', title: 'Explain the statement under the cursor' },
   { id: 'format-sql', keys: 'Mod+Shift+F', title: 'Format the selection, or everything' },
   { id: 'toggle-focus', keys: 'Mod+J', title: 'Switch focus between the editor and the results' },
+  { id: 'review-changes', keys: 'Mod+S', title: 'Review and save the changes to the rows' },
   { id: 'copy-cells', keys: 'Mod+C', title: 'Copy the selected cells', scope: 'grid' },
   {
     id: 'copy-cells-with-header',
@@ -45,6 +46,14 @@ export const BINDINGS: readonly Binding[] = [
   },
   { id: 'select-all-cells', keys: 'Mod+A', title: 'Select every cell', scope: 'grid' },
   { id: 'inspect-row', keys: 'Space', title: 'Show the row in the inspector', scope: 'grid' },
+  { id: 'edit-cell', keys: 'Enter', title: 'Edit the cell', scope: 'grid' },
+  { id: 'set-null', keys: 'Mod+Shift+Backspace', title: 'Set the selected cells to NULL', scope: 'grid' },
+  {
+    id: 'delete-rows',
+    keys: 'Mod+Backspace',
+    title: 'Delete the selected rows, or keep them',
+    scope: 'grid',
+  },
 ]
 
 /** Keys the grid handles that cannot be rebound. */
@@ -53,6 +62,8 @@ export const GRID_FIXED_KEYS = [
   ['PageUp PageDown', 'Move a screen at a time'],
   ['Mod+Up Mod+Down', 'First or last row'],
   ['Home End', 'First or last column'],
+  ['F2', 'Edit the cell'],
+  ['Enter Tab Escape', 'While editing: keep the value and move down or right, or cancel'],
 ] as const
 
 /** `Mod+1` … `Mod+9` jump to tab N. Fixed, so not in `BINDINGS`. */

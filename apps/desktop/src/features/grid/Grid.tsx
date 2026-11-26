@@ -10,7 +10,18 @@ import * as ipc from '../../ipc/commands'
 import type { Column, CopyFormat } from '../../ipc/types'
 import { bindingFor, currentPlatform, keysFor } from '../../keymap/keymap'
 import { copyText } from '../../lib/clipboard'
-import { errorText, type ResultView, say, select, sortResult, useApp } from '../../state/app'
+import {
+  type Draft,
+  errorText,
+  openDialog,
+  type ResultView,
+  say,
+  select,
+  setCell,
+  sortResult,
+  toggleDeleteRows,
+  useApp,
+} from '../../state/app'
 import {
   borderAt,
   type Cell,
@@ -76,7 +87,28 @@ type Props = {
 
 type MenuTarget = { kind: 'cells' } | { kind: 'header'; col: number } | null
 
+/** The value a cell shows: the draft's when it has one. */
+function shown(draft: Draft | null, source: number | undefined, column: number, stored: string | null) {
+  if (draft === null || source === undefined) return { value: stored, edited: false }
+  const cells = draft.updates[source]
+  if (cells && column in cells) return { value: cells[column] ?? null, edited: true }
+  return { value: stored, edited: false }
+}
+
 export function Grid({ tabId, result, insertTable }: Props) {
+  const draft = useApp((s) => {
+    const d = s.tabs.find((t) => t.id === tabId)?.draft ?? null
+    return d?.resultId === result.resultId ? d : null
+  })
+  const deleted = useMemo(() => new Set(draft?.deletes ?? []), [draft])
+  const [editing, setEditingState] = useState<{ row: number; col: number; value: string } | null>(null)
+  // Finishing an edit moves focus, which blurs the input; a blur after the
+  // edit was kept or cancelled must not keep it again.
+  const editOpen = useRef(false)
+  const setEditing = (next: { row: number; col: number; value: string } | null) => {
+    editOpen.current = next !== null
+    setEditingState(next)
+  }
   const scroller = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
   const [size, setSize] = useState({ width: 0, height: 0 })
@@ -200,7 +232,13 @@ export function Grid({ tabId, result, insertTable }: Props) {
         }
         const row = cache.row(r)
         if (!row) continue
-        const cell = row[source] ?? null
+        const { value: cell, edited } = shown(draft, cache.source(r), source, row[source] ?? null)
+        if (edited) {
+          ctx.globalAlpha = 0.28
+          ctx.fillStyle = '#e2a336'
+          ctx.fillRect(x, y, w, ROW_HEIGHT)
+          ctx.globalAlpha = 1
+        }
         if (cell === null) {
           ctx.font = `italic ${FONT}`
           ctx.fillStyle = colors.muted
@@ -240,6 +278,26 @@ export function Grid({ tabId, result, insertTable }: Props) {
     if (l.pinnedCount > 0) {
       ctx.fillStyle = colors.muted
       ctx.fillRect(l.gutter + l.pinnedWidth - 1, 0, 1, height)
+    }
+
+    // Rows marked for deletion: tinted and struck through.
+    for (let k = 0; k < rowsShown; k++) {
+      const r = firstRow + k
+      if (r >= rowCount) break
+      const source = cache.source(r)
+      if (source === undefined || !deleted.has(source)) continue
+      const y = y0 + k * ROW_HEIGHT
+      ctx.globalAlpha = 0.14
+      ctx.fillStyle = '#e5484d'
+      ctx.fillRect(l.gutter, y, width, ROW_HEIGHT)
+      ctx.globalAlpha = 0.8
+      ctx.fillRect(
+        l.gutter,
+        y + ROW_HEIGHT / 2,
+        Math.min(width, l.gutter + l.totalWidth - scroll.left) - l.gutter,
+        1,
+      )
+      ctx.globalAlpha = 1
     }
 
     // Row lines across the data.
@@ -362,7 +420,96 @@ export function Grid({ tabId, result, insertTable }: Props) {
 
   const pageRows = Math.max(1, Math.floor((size.height - HEADER_HEIGHT) / ROW_HEIGHT) - 1)
 
+  // --- Editing -------------------------------------------------------------------
+
+  /** Says why the rows cannot be edited, if they cannot. */
+  const editable = (): boolean => {
+    if (!result.edit) {
+      say(
+        result.done
+          ? 'Checking whether these rows can be edited…'
+          : 'Rows can be edited once the statement has finished.',
+      )
+      return false
+    }
+    if (result.edit.reason) {
+      say(`These rows cannot be edited: ${result.edit.reason}.`, true)
+      return false
+    }
+    return true
+  }
+
+  const startEditing = (cell = selection?.focus) => {
+    if (!cell || !editable()) return
+    const source = cache.source(cell.row)
+    const row = cache.row(cell.row)
+    if (source === undefined || !row) return
+    if (deleted.has(source)) {
+      say('That row is marked for deletion.')
+      return
+    }
+    const column = l.order[cell.col] as number
+    const { value } = shown(draft, source, column, row[column] ?? null)
+    setSelection({ anchor: cell, focus: cell })
+    setEditing({ row: cell.row, col: cell.col, value: value ?? '' })
+  }
+
+  const commitEdit = (value: string | null, then?: { rows: number; cols: number }) => {
+    const current = editing
+    if (!editOpen.current) return
+    setEditing(null)
+    scroller.current?.focus()
+    if (!current) return
+    const source = cache.source(current.row)
+    const row = cache.row(current.row)
+    if (source !== undefined && row) {
+      const column = l.order[current.col] as number
+      setCell(tabId, result.resultId, source, column, value, row[column] ?? null)
+    }
+    if (then) {
+      focusCell(move({ anchor: current, focus: current }, then.rows, then.cols, false, rowCount, colCount))
+    }
+  }
+
+  /** Every selected cell's (source row, column), loaded or not. */
+  const selectedCells = (): { source: number; column: number; original: string | null }[] => {
+    if (!selection) return []
+    const r = rect(selection)
+    const out = []
+    for (let row = r.top; row <= r.bottom; row++) {
+      const source = cache.source(row)
+      const values = cache.row(row)
+      if (source === undefined || !values) continue
+      for (let col = r.left; col <= r.right; col++) {
+        const column = l.order[col] as number
+        out.push({ source, column, original: values[column] ?? null })
+      }
+    }
+    return out
+  }
+
+  const setNull = () => {
+    if (!editable()) return
+    for (const c of selectedCells()) setCell(tabId, result.resultId, c.source, c.column, null, c.original)
+  }
+
+  const deleteRows = () => {
+    if (!editable() || !selection) return
+    const r = rect(selection)
+    const rows: number[] = []
+    for (let row = r.top; row <= r.bottom; row++) {
+      const source = cache.source(row)
+      if (source !== undefined) rows.push(source)
+    }
+    if (rows.length > 0) toggleDeleteRows(tabId, result.resultId, rows)
+  }
+
+  const addRow = () => {
+    if (editable()) openDialog({ kind: 'insertRow', tabId })
+  }
+
   const onKeyDown = (event: React.KeyboardEvent) => {
+    if (editing) return
     const found = bindingFor(event.nativeEvent, overrides, platform, 'grid')
     if (found) {
       event.preventDefault()
@@ -370,6 +517,14 @@ export function Grid({ tabId, result, insertTable }: Props) {
       if (found.id === 'copy-cells-with-header') copy({ kind: 'tsv', header: true })
       if (found.id === 'select-all-cells') setSelection(selectAll(rowCount, colCount))
       if (found.id === 'inspect-row') inspect()
+      if (found.id === 'edit-cell') startEditing()
+      if (found.id === 'set-null') setNull()
+      if (found.id === 'delete-rows') deleteRows()
+      return
+    }
+    if (event.key === 'F2') {
+      event.preventDefault()
+      startEditing()
       return
     }
     const mod = platform === 'mac' ? event.metaKey : event.ctrlKey
@@ -472,6 +627,11 @@ export function Grid({ tabId, result, insertTable }: Props) {
     }
     const cell = cellAt(x, y)
     if (!cell) return
+    if (event.detail === 2) {
+      event.preventDefault()
+      startEditing(cell)
+      return
+    }
     setSelection(
       event.shiftKey && selection ? { anchor: selection.anchor, focus: cell } : { anchor: cell, focus: cell },
     )
@@ -531,12 +691,19 @@ export function Grid({ tabId, result, insertTable }: Props) {
   let description = `${rowCount.toLocaleString()} rows, ${colCount} columns`
   if (selection) {
     const { row, col } = selection.focus
-    const source = l.order[col] as number
-    const value = cache.row(row)?.[source]
-    const name = result.columns[source]?.name ?? ''
+    const column = l.order[col] as number
+    const stored = cache.row(row)?.[column]
+    const sourceRow = cache.source(row)
+    const { value, edited } =
+      stored === undefined ? { value: undefined, edited: false } : shown(draft, sourceRow, column, stored)
+    const name = result.columns[column]?.name ?? ''
+    const marks = [
+      edited && 'edited',
+      sourceRow !== undefined && deleted.has(sourceRow) && 'row marked for deletion',
+    ].filter(Boolean)
     description = `Row ${row + 1} of ${rowCount.toLocaleString()}, ${name}: ${
       value === undefined ? 'loading' : value === null ? 'NULL' : value
-    }`
+    }${marks.length > 0 ? ` (${marks.join(', ')})` : ''}`
   }
 
   const hiddenCount = states.filter((s) => s.hidden).length
@@ -588,6 +755,18 @@ export function Grid({ tabId, result, insertTable }: Props) {
             <MenuItem onSelect={() => copy({ kind: 'insert', table: insertTable })}>
               Copy as INSERT statements
             </MenuItem>
+            <MenuSeparator />
+            <MenuSeparator />
+            <MenuItem onSelect={() => startEditing()} keys={keys('edit-cell')}>
+              Edit cell
+            </MenuItem>
+            <MenuItem onSelect={setNull} keys={keys('set-null')}>
+              Set to NULL
+            </MenuItem>
+            <MenuItem onSelect={deleteRows} keys={keys('delete-rows')}>
+              Delete or keep rows
+            </MenuItem>
+            <MenuItem onSelect={addRow}>Add a row…</MenuItem>
             <MenuSeparator />
             <MenuItem onSelect={() => inspect()} keys={keys('inspect-row')}>
               Show row in the inspector
@@ -662,6 +841,40 @@ export function Grid({ tabId, result, insertTable }: Props) {
         className="pointer-events-none absolute top-0 left-0"
         style={{ width: size.width, height: size.height }}
       />
+      {editing && (
+        <input
+          // biome-ignore lint/a11y/noAutofocus: editing starts on a key or double-click
+          autoFocus
+          aria-label={`New value for ${result.columns[l.order[editing.col] as number]?.name ?? 'the cell'}`}
+          value={editing.value}
+          spellCheck={false}
+          autoCapitalize="off"
+          autoCorrect="off"
+          onChange={(e) => setEditing({ ...editing, value: e.target.value })}
+          onKeyDown={(e) => {
+            e.stopPropagation()
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              commitEdit(editing.value, { rows: 1, cols: 0 })
+            } else if (e.key === 'Tab') {
+              e.preventDefault()
+              commitEdit(editing.value, { rows: 0, cols: e.shiftKey ? -1 : 1 })
+            } else if (e.key === 'Escape') {
+              e.preventDefault()
+              setEditing(null)
+              scroller.current?.focus()
+            }
+          }}
+          onBlur={() => editing && commitEdit(editing.value)}
+          className="absolute z-10 rounded-sm border-2 border-accent bg-bg px-1.5 font-mono text-[12px] outline-none"
+          style={{
+            left: columnX(l, editing.col, scroll.left),
+            top: HEADER_HEIGHT + editing.row * ROW_HEIGHT - scrollTop,
+            width: Math.max(120, l.width[editing.col] as number),
+            height: ROW_HEIGHT,
+          }}
+        />
+      )}
       <div aria-live="polite" className="sr-only" data-testid="grid-cursor">
         {description}
       </div>
