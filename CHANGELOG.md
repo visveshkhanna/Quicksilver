@@ -66,10 +66,25 @@ All notable changes are recorded here. The format follows
 - Tables opened from the navigator or `Mod+P` get a `WHERE` bar. It writes
   the filtered query into the editor and runs it.
 - Copy DDL for tables, views, routines and sequences.
+- Editing rows:
+  - Edit cells in the grid, set them to NULL, delete rows and add rows. The
+    changes collect in a draft.
+  - `Mod+S` shows the exact statements before anything runs. They are saved
+    in one transaction, which is undone unless every statement changed
+    exactly one row.
+  - Rows are named by primary key. A table without one is named by every
+    value, and the one-row rule then proves the values were unique.
+  - The UI never sends SQL for an edit. Rust generates every statement and
+    checks its parse tree against the table's catalog before it can run.
+- Connection modes are enforced in Rust. Read-only connections cannot be
+  edited, read-write connections ask before a script that may change the
+  schema, and full ones run everything.
+- The filter bar's query is built and checked in Rust too.
 
 ### Changed
 
 - The row cap is now 100,000 per statement, up from 1,000.
+- Result pages (`QSP2`) carry each row's place in arrival order.
 
 ### Fixed
 
