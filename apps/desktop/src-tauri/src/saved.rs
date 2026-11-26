@@ -98,6 +98,19 @@ pub async fn refresh_catalog(
     saved::refresh_catalog(&service, &store, session, &profile_id, database.as_deref()).await
 }
 
+/// Reads one database's schemas and objects into the catalog cache, so
+/// `Mod+P` finds tables in databases that were never opened.
+#[tauri::command]
+pub async fn index_database(
+    service: State<'_, Service>,
+    store: State<'_, Arc<Store>>,
+    session: SessionId,
+    profile_id: String,
+    database: String,
+) -> Result<()> {
+    saved::index_database(&service, &store, session, &profile_id, &database).await
+}
+
 /// The cached names, for one connection or all of them.
 #[tauri::command]
 pub async fn catalog(

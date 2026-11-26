@@ -150,8 +150,18 @@ impl ConnectionConfig {
     /// The user name and password are percent-decoded, so `@` and `:` in
     /// them are written `%40` and `%3A`. `sslmode` and `sslrootcert` are
     /// read into their fields; other parameters go to `options`.
+    ///
+    /// A JDBC URL (`jdbc:postgresql://host/db?user=app&password=pw`), as
+    /// other tools copy them, is read the same way: the `jdbc:` prefix is
+    /// dropped, and `user` and `password` parameters stand in for missing
+    /// user info.
     pub fn from_url(input: &str) -> Result<Self> {
-        let url = url::Url::parse(input.trim())
+        let input = input.trim();
+        let input = match input.get(..5) {
+            Some(prefix) if prefix.eq_ignore_ascii_case("jdbc:") => &input[5..],
+            _ => input,
+        };
+        let url = url::Url::parse(input)
             .map_err(|err| Error::config(format!("not a connection URL: {err}")))?;
         let engine = Engine::from_url_scheme(url.scheme()).ok_or_else(|| {
             Error::config(format!(
@@ -192,6 +202,12 @@ impl ConnectionConfig {
 
         for (key, value) in url.query_pairs() {
             match key.as_ref() {
+                "user" if !engine.is_file_based() && config.user.is_none() => {
+                    config.user = Some(value.into_owned());
+                }
+                "password" if !engine.is_file_based() && config.password.is_none() => {
+                    config.password = Some(value.into_owned());
+                }
                 "sslmode" => config.ssl_mode = SslMode::parse(&value)?,
                 "sslrootcert" => config.ssl_root_cert = Some(PathBuf::from(value.as_ref())),
                 _ => {
@@ -243,6 +259,29 @@ mod tests {
             config.options.get("application_name").map(String::as_str),
             Some("qs")
         );
+    }
+
+    #[test]
+    fn jdbc_urls_are_read_with_their_user_and_password_parameters() {
+        let config = ConnectionConfig::from_url(
+            "jdbc:postgresql://db.example.com:5432/orders?user=app&password=&ssl=true",
+        )
+        .expect("parses");
+        assert_eq!(config.engine, Engine::Postgres);
+        assert_eq!(config.host.as_deref(), Some("db.example.com"));
+        assert_eq!(config.database.as_deref(), Some("orders"));
+        assert_eq!(config.user.as_deref(), Some("app"));
+        assert_eq!(config.password.as_deref(), Some(""));
+        assert_eq!(config.options.get("ssl").map(String::as_str), Some("true"));
+        assert!(!config.options.contains_key("user"));
+    }
+
+    #[test]
+    fn user_info_wins_over_user_parameters() {
+        let config =
+            ConnectionConfig::from_url("postgres://alice:pw@host/db?user=bob").expect("parses");
+        assert_eq!(config.user.as_deref(), Some("alice"));
+        assert_eq!(config.options.get("user").map(String::as_str), Some("bob"));
     }
 
     #[test]

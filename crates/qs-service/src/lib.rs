@@ -239,6 +239,10 @@ fn byte_to_utf16(text: &str, byte: usize) -> usize {
 
 struct Session {
     connection: Connection,
+    /// How it connected, to open short-lived siblings in other databases.
+    config: ConnectionConfig,
+    /// The database it is in, when known.
+    database: Option<String>,
     read_only: bool,
     policy: SessionPolicy,
     /// One script at a time per session: statements on one connection run in
@@ -315,6 +319,8 @@ impl Service {
             id,
             Arc::new(Session {
                 connection,
+                config: config.clone(),
+                database: effective_database(config),
                 read_only: config.read_only,
                 policy,
                 running: tokio::sync::Mutex::new(()),
@@ -607,6 +613,33 @@ impl Service {
     /// The objects in a schema.
     pub async fn objects(&self, session: SessionId, schema: &str) -> Result<Vec<DbObject>> {
         self.session(session)?.connection.objects(schema).await
+    }
+
+    /// The schemas of `database` and the objects in each, for the catalog
+    /// cache. The session's own database is read over the session; another
+    /// one over a connection with the session's settings that is closed once
+    /// read, so indexing never leaves sessions behind.
+    pub async fn catalog_of(
+        &self,
+        session: SessionId,
+        database: &str,
+    ) -> Result<Vec<(String, Vec<DbObject>)>> {
+        let session = self.session(session)?;
+        let sibling;
+        let connection = if session.database.as_deref() == Some(database) {
+            &session.connection
+        } else {
+            let mut config = session.config.clone();
+            config.database = Some(database.to_owned());
+            sibling = Connection::connect(&config).await?;
+            &sibling
+        };
+        let mut catalog = Vec::new();
+        for schema in connection.schemas().await? {
+            let objects = connection.objects(&schema).await?;
+            catalog.push((schema, objects));
+        }
+        Ok(catalog)
     }
 
     /// The columns of a table or view.

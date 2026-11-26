@@ -164,6 +164,32 @@ pub async fn refresh_catalog(
         .replace_objects(profile_id, database, &schemas, &objects, now_ms())
 }
 
+/// Reads `database`'s schemas and objects into the catalog cache, over a
+/// short-lived connection when it is not the session's own database.
+pub async fn index_database(
+    service: &Service,
+    store: &Store,
+    session: SessionId,
+    profile_id: &str,
+    database: &str,
+) -> Result<()> {
+    let catalog = service.catalog_of(session, database).await?;
+    let schemas: Vec<String> = catalog.iter().map(|(schema, _)| schema.clone()).collect();
+    let objects: Vec<CatalogObject> = catalog
+        .into_iter()
+        .flat_map(|(schema, objects)| {
+            objects.into_iter().map(move |object| CatalogObject {
+                schema: schema.clone(),
+                name: object.name,
+                kind: kind_name(&object.kind),
+            })
+        })
+        .collect();
+    store
+        .state()
+        .replace_objects(profile_id, database, &schemas, &objects, now_ms())
+}
+
 /// The kind as the UI spells it (`table`, `materializedView`, ...).
 fn kind_name(kind: &crate::ObjectKind) -> String {
     match serde_json::to_value(kind) {

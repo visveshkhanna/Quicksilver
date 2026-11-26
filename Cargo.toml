@@ -34,6 +34,7 @@ rusqlite = { version = "0.43", default-features = false, features = ["bundled"] 
 
 tauri = { version = "~2.11", features = [] }
 tauri-build = { version = "~2.6", features = [] }
+tauri-plugin-dialog = "~2.7"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

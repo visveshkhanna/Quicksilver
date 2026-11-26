@@ -2,6 +2,7 @@
 //! `qs-store`, which hold the logic and the tests.
 
 mod commands;
+mod import;
 mod saved;
 
 use std::sync::Arc;
@@ -12,6 +13,7 @@ use tauri::Manager;
 /// Builds and runs the app until its last window closes.
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(qs_service::Service::new())
         .setup(|app| {
             let channel = Channel::current();
@@ -53,6 +55,7 @@ pub fn run() {
             saved::delete_profile,
             saved::connect_profile,
             saved::refresh_catalog,
+            saved::index_database,
             saved::catalog,
             saved::history,
             saved::clear_history,
@@ -66,6 +69,8 @@ pub fn run() {
             saved::set_layout,
             saved::test_connection,
             saved::parse_url,
+            import::dbeaver_scan,
+            import::dbeaver_import,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|err| {
