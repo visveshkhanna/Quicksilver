@@ -1,16 +1,20 @@
 import { Kbd } from '../../app/Kbd'
 import { Button } from '../../app/ui'
 import type { Engine } from '../../ipc/types'
+import { copyText } from '../../lib/clipboard'
 import { quoteIdent } from '../../lib/target'
 import {
+  askDiscardDraft,
   type Draft,
-  discardDraft,
   draftSize,
+  errorText,
   openDialog,
   type ResultView,
   type RunState,
   reviewDraft,
+  runAgain,
   runAgainUncapped,
+  say,
   setView,
   showResult,
   type Tab,
@@ -172,7 +176,7 @@ function EditBar({ tab, result }: { tab: Tab; result: ResultView }) {
             {draft && draft.inserts.length > 0 && (
               <span className="min-w-0 truncate text-muted @max-[640px]:hidden">({breakdown(draft)})</span>
             )}
-            <Button small onClick={() => discardDraft(tab.id)}>
+            <Button small onClick={() => askDiscardDraft(tab.id)}>
               Discard
             </Button>
             <Button small kind="primary" onClick={() => void reviewDraft()}>
@@ -217,24 +221,50 @@ function ErrorBox({ run }: { run: RunState }) {
   const error = run.error
   if (!error) return null
   if (error.kind === 'cancelled') return <p className="px-3 py-2 text-muted">Cancelled.</p>
-  const message = 'message' in error ? error.message : error.kind
+  const message = errorText(error)
+  const details =
+    error.kind === 'query'
+      ? [
+          error.code && `code ${error.code}`,
+          error.position !== null && `at character ${error.position}`,
+          error.detail,
+        ]
+          .filter(Boolean)
+          .join(' · ')
+      : ''
+  const prefix =
+    run.errorIndex !== null && run.statements.length > 0 ? `Statement ${run.errorIndex + 1}: ` : ''
+  const retry = error.kind === 'closed' || error.kind === 'connect' || error.kind === 'tls'
   return (
-    <div role="alert" className="m-2 shrink-0 rounded border border-[#e5484d]/40 bg-[#e5484d]/8 px-3 py-2">
-      <p className="font-semibold text-[#e5484d]">
-        {run.errorIndex !== null && run.statements.length > 0 ? `Statement ${run.errorIndex + 1}: ` : ''}
-        {message}
-      </p>
-      {error.kind === 'query' && (
-        <p className="mt-1 text-[12px] text-muted">
-          {[
-            error.code && `code ${error.code}`,
-            error.position !== null && `at character ${error.position}`,
-            error.detail,
-          ]
-            .filter(Boolean)
-            .join(' · ')}
+    <div
+      role="alert"
+      className="m-2 flex shrink-0 items-start gap-3 rounded border border-[#e5484d]/40 bg-[#e5484d]/8 px-3 py-2"
+    >
+      <div className="min-w-0 flex-1 select-text">
+        <p className="font-semibold break-words text-[#e5484d]">
+          {prefix}
+          {message}
         </p>
-      )}
+        {details && <p className="mt-1 text-[12px] text-muted">{details}</p>}
+      </div>
+      <div className="flex shrink-0 gap-1.5">
+        {retry && (
+          <Button small onClick={() => void runAgain()}>
+            {error.kind === 'closed' ? 'Reconnect and run' : 'Try again'}
+          </Button>
+        )}
+        <Button
+          small
+          onClick={() =>
+            copyText([prefix + message, details].filter(Boolean).join('\n')).then(
+              () => say('Copied the error'),
+              (err) => say(`Could not copy: ${errorText(err)}`, true),
+            )
+          }
+        >
+          Copy
+        </Button>
+      </div>
     </div>
   )
 }

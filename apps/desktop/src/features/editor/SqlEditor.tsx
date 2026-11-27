@@ -31,7 +31,7 @@ import { tags } from '@lezer/highlight'
 import { useEffect, useRef } from 'react'
 import type { Engine } from '../../ipc/types'
 import { type SchemaSource, schemaCompletion } from './completion'
-import { parked, views, wiring } from './registry'
+import { editorHooks, parked, views, wiring } from './registry'
 
 // --- Marks: the statement that just ran, and where an error is -------------------
 
@@ -81,6 +81,8 @@ export function flashRange(id: string, from: number, to: number) {
     if (views.get(id) === view) view.dispatch({ effects: flashEffect.of(null) })
   }, 600)
 }
+
+editorHooks.flash = flashRange
 
 // --- Looks ---------------------------------------------------------------------
 
@@ -248,7 +250,14 @@ export function SqlEditor({
   }, [doc, cursor, tabId])
 
   useEffect(() => {
-    views.get(tabId)?.dispatch({ effects: errorEffect.of(errorAt) })
+    const view = views.get(tabId)
+    if (!view) return
+    const effects = [errorEffect.of(errorAt)]
+    // Bring the mark into view in a long script.
+    if (errorAt !== null && errorAt <= view.state.doc.length) {
+      effects.push(EditorView.scrollIntoView(errorAt, { y: 'center' }) as never)
+    }
+    view.dispatch({ effects })
   }, [errorAt, tabId])
 
   return <div ref={host} className="h-full min-h-0 overflow-hidden" />

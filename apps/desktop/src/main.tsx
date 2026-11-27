@@ -2,6 +2,7 @@ import { isTauri } from '@tauri-apps/api/core'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './app/App'
+import { guardQuit } from './app/quit'
 import { boot, errorText, say } from './state/app'
 import { loadPanelLayout } from './state/layoutStorage'
 import './styles.css'
@@ -13,6 +14,7 @@ async function start() {
   // In a plain browser (`pnpm dev:web`) there is no backend to load from.
   if (isTauri()) {
     try {
+      await guardQuit().catch(() => {})
       await Promise.all([boot(), loadPanelLayout()])
     } catch (err) {
       say(`Could not load saved state: ${errorText(err)}`, true)

@@ -929,7 +929,10 @@ export function Grid({ tabId, result, insertTable }: Props) {
         style={{ width: size.width, height: size.height }}
       />
       {editing && (
-        <input
+        // A textarea, not an input: an input drops line breaks, which would
+        // silently change a multi-line value. Enter saves; Shift+Enter or
+        // Alt+Enter adds a line.
+        <textarea
           // biome-ignore lint/a11y/noAutofocus: editing starts on a key or double-click
           autoFocus
           data-cell-editor
@@ -938,10 +941,15 @@ export function Grid({ tabId, result, insertTable }: Props) {
           spellCheck={false}
           autoCapitalize="off"
           autoCorrect="off"
+          rows={1}
+          onFocus={(e) => {
+            const end = e.currentTarget.value.length
+            e.currentTarget.setSelectionRange(end, end)
+          }}
           onChange={(e) => setEditing({ ...editing, value: e.target.value })}
           onKeyDown={(e) => {
             e.stopPropagation()
-            if (e.key === 'Enter') {
+            if (e.key === 'Enter' && !e.shiftKey && !e.altKey) {
               e.preventDefault()
               commitEdit(editing.value, { rows: 1, cols: 0 })
             } else if (e.key === 'Tab') {
@@ -954,12 +962,12 @@ export function Grid({ tabId, result, insertTable }: Props) {
             }
           }}
           onBlur={() => editing && commitEdit(editing.value)}
-          className="absolute z-10 rounded-sm border-2 border-accent bg-bg px-1.5 font-mono text-[12px] outline-none"
+          className="absolute z-10 resize-none rounded-sm border-2 border-accent bg-bg px-1.5 font-mono text-[12px] leading-[18px] outline-none"
           style={{
             left: columnX(l, editing.col, scroll.left),
             top: HEADER_HEIGHT + editing.row * ROW_HEIGHT - scrollTop,
-            width: Math.max(120, l.width[editing.col] as number),
-            height: ROW_HEIGHT,
+            width: Math.max(160, l.width[editing.col] as number),
+            height: Math.max(ROW_HEIGHT, Math.min(8, editing.value.split('\n').length) * 18 + 6),
           }}
         />
       )}

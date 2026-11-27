@@ -6,9 +6,38 @@ mod import;
 mod saved;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use qs_store::{Channel, DataDir, Keychain, Store};
-use tauri::Manager;
+use tauri::{Emitter, Manager, RunEvent, WindowEvent};
+
+/// Set once the UI has agreed to quit, so the exit it asks for goes through.
+static QUITTING: AtomicBool = AtomicBool::new(false);
+
+/// When the last close or quit was asked for, in milliseconds since the epoch.
+static ASKED_MS: AtomicU64 = AtomicU64::new(0);
+
+/// Whether to ask the UI before closing. A second request within three
+/// seconds goes through regardless, so a UI that cannot answer never traps
+/// the window open.
+fn ask_first() -> bool {
+    if QUITTING.load(Ordering::SeqCst) {
+        return false;
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+    let before = ASKED_MS.swap(now, Ordering::SeqCst);
+    now.saturating_sub(before) > 3_000
+}
+
+/// Quits the app. The UI calls this once it has saved what it holds and the
+/// user has agreed to lose unsaved row changes.
+#[tauri::command]
+fn quit_app(app: tauri::AppHandle) {
+    QUITTING.store(true, Ordering::SeqCst);
+    app.exit(0);
+}
 
 /// Builds and runs the app until its last window closes.
 pub fn run() {
@@ -71,10 +100,32 @@ pub fn run() {
             saved::parse_url,
             import::dbeaver_scan,
             import::dbeaver_import,
+            quit_app,
         ])
-        .run(tauri::generate_context!())
+        // Closing the window or quitting (Cmd+Q) asks the UI first: it saves
+        // tab text still waiting and asks before unsaved row changes are lost,
+        // then calls `quit_app`.
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event
+                && ask_first()
+            {
+                api.prevent_close();
+                let _ = window.emit("quit-requested", ());
+            }
+        })
+        .build(tauri::generate_context!())
         .unwrap_or_else(|err| {
             eprintln!("Quicksilver failed to start: {err}");
             std::process::exit(1);
+        })
+        .run(|app, event| {
+            if let RunEvent::ExitRequested { api, code, .. } = event
+                && code.is_none()
+                && !app.webview_windows().is_empty()
+                && ask_first()
+            {
+                api.prevent_exit();
+                let _ = app.emit("quit-requested", ());
+            }
         });
 }

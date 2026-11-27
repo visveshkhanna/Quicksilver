@@ -8,7 +8,7 @@ export function PasswordPrompt() {
   const [password, setPassword] = useState('')
   const [remember, setRemember] = useState(true)
   if (!request) return null
-  const { profile, resolve } = request
+  const { profile, resolve, error } = request
   const who = [profile.user, profile.host].filter(Boolean).join(' @ ')
   return (
     <Modal title={`Password for ${profile.name}`} onClose={() => resolve(null)} width={420}>
@@ -21,6 +21,11 @@ export function PasswordPrompt() {
         }}
       >
         {who && <p className="text-muted">{who}</p>}
+        {error && (
+          <p role="alert" className="m-0 text-[12px] break-words text-[#e5484d] select-text">
+            {error}
+          </p>
+        )}
         <input
           // biome-ignore lint/a11y/noAutofocus: the dialog exists to take this input
           autoFocus

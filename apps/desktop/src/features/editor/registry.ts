@@ -38,3 +38,9 @@ export function selectionIn(id: string): { from: number; to: number } | null {
   const range = views.get(id)?.state.selection.main
   return range && !range.empty ? { from: range.from, to: range.to } : null
 }
+
+/** Editor effects app state can ask for; the editor module fills them in. */
+export const editorHooks = {
+  /** Briefly highlights a range in a tab's editor. */
+  flash: (_id: string, _from: number, _to: number) => {},
+}

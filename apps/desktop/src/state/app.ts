@@ -2,7 +2,7 @@
 // `useApp(selector)` and call the exported functions; nothing else writes.
 
 import { create } from 'zustand'
-import { forgetEditor, selectionIn } from '../features/editor/registry'
+import { editorHooks, forgetEditor, selectionIn } from '../features/editor/registry'
 import { forgetGrids } from '../features/grid/memory'
 import { moved, normalPath, parentOf, within } from '../features/navigator/projects'
 import * as ipc from '../ipc/commands'
@@ -145,6 +145,8 @@ export type Dialog =
 
 export type PasswordRequest = {
   profile: Profile
+  /** Why it is asked again: the last password was refused. */
+  error: string | null
   resolve: (answer: { password: string; remember: boolean } | null) => void
 }
 
@@ -295,8 +297,14 @@ export function isQsError(err: unknown): err is QsError {
   return typeof err === 'object' && err !== null && 'kind' in err
 }
 
+/** What an error without a message of its own means, in words. */
+const BARE: Record<string, string> = {
+  closed: 'The connection was closed, by the server or a network timeout. Run again to reconnect.',
+  cancelled: 'Cancelled.',
+}
+
 export function errorText(err: unknown): string {
-  if (isQsError(err)) return 'message' in err ? err.message : err.kind
+  if (isQsError(err)) return 'message' in err ? err.message : (BARE[err.kind] ?? err.kind)
   return err instanceof Error ? err.message : String(err)
 }
 
@@ -314,11 +322,15 @@ export function closeDialog() {
   set({ dialog: null })
 }
 
-function askPassword(profile: Profile): Promise<{ password: string; remember: boolean } | null> {
+function askPassword(
+  profile: Profile,
+  error: string | null = null,
+): Promise<{ password: string; remember: boolean } | null> {
   return new Promise((resolve) => {
     set({
       passwordRequest: {
         profile,
+        error,
         resolve: (answer) => {
           set({ passwordRequest: null })
           resolve(answer)
@@ -474,17 +486,34 @@ export function ensureSession(profileId: string, database: string | null): Promi
   return connecting
 }
 
+/** Whether a failed connect was the server refusing the password. */
+function refusedPassword(err: unknown): boolean {
+  return isQsError(err) && err.kind === 'connect' && /password|authentication failed/i.test(err.message)
+}
+
 async function connect(profileId: string, database: string | null): Promise<SessionInfo> {
   const profile = profileById(profileId)
   if (!profile) throw new Error('that connection no longer exists')
-  let info: SessionInfo
+  let info: SessionInfo | null = null
+  let refused: string | null = null
   try {
     info = await saved.connectProfile(profileId, database)
   } catch (err) {
-    if (!isQsError(err) || err.kind !== 'passwordNeeded') throw err
-    const answer = await askPassword(profile)
+    const keychain = profile.auth.kind === 'keychain'
+    if (!isQsError(err) || !(err.kind === 'passwordNeeded' || (keychain && refusedPassword(err)))) throw err
+    if (err.kind !== 'passwordNeeded') refused = `The saved password was refused: ${errorText(err)}`
+  }
+  // Asked for, and asked again while the server refuses what was typed.
+  while (info === null) {
+    const answer = await askPassword(profile, refused)
     if (!answer) throw { kind: 'cancelled' } satisfies QsError
-    info = await saved.connectProfile(profileId, database, answer.password)
+    try {
+      info = await saved.connectProfile(profileId, database, answer.password)
+    } catch (err) {
+      if (!refusedPassword(err)) throw err
+      refused = errorText(err)
+      continue
+    }
     if (answer.remember) {
       const { id, createdMs, updatedMs, ...fields } = profile
       await saved.updateProfile(id, fields, { kind: 'set', password: answer.password })
@@ -500,6 +529,37 @@ async function connect(profileId: string, database: string | null): Promise<Sess
   // The catalog cache is refreshed in the background after connecting.
   setTimeout(() => void reloadCatalog(), 1500)
   return info
+}
+
+/**
+ * Forgets a session the server closed, so the next use connects afresh
+ * instead of failing on the dead one again.
+ */
+export function forgetSession(sessionId: number) {
+  void ipc.disconnect(sessionId).catch(() => {})
+  set((s) => ({
+    sessions: Object.fromEntries(Object.entries(s.sessions).filter(([, info]) => info.id !== sessionId)),
+  }))
+}
+
+/**
+ * Runs a catalog read on a session for `profileId` in `database`. When the
+ * session turns out to be closed, it is forgotten and the read tried once
+ * more on a new one: reads are safe to repeat.
+ */
+async function withSession<T>(
+  profileId: string,
+  database: string | null,
+  read: (session: SessionInfo) => Promise<T>,
+): Promise<T> {
+  const session = await ensureSession(profileId, database)
+  try {
+    return await read(session)
+  } catch (err) {
+    if (!isQsError(err) || err.kind !== 'closed') throw err
+    forgetSession(session.id)
+    return read(await ensureSession(profileId, database))
+  }
 }
 
 export async function disconnectProfile(profileId: string) {
@@ -620,15 +680,15 @@ export function activeTab(state: State = get()): Tab | undefined {
   return state.tabs.find((t) => t.id === state.activeTabId)
 }
 
-const saveTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const saveTimers = new Map<string, { timer: ReturnType<typeof setTimeout>; write: () => Promise<void> }>()
 
 function persistTab(tab: Tab, now = false) {
   const write = () => {
     saveTimers.delete(tab.id)
     const current = get().tabs.find((t) => t.id === tab.id)
-    if (!current) return
+    if (!current) return Promise.resolve()
     const position = get().tabs.indexOf(current)
-    void saved
+    return saved
       .saveBuffer({
         id: current.id,
         profileId: current.profileId,
@@ -640,9 +700,21 @@ function persistTab(tab: Tab, now = false) {
       })
       .catch((err) => say(`Could not save the tab: ${errorText(err)}`, true))
   }
-  clearTimeout(saveTimers.get(tab.id))
-  if (now) write()
-  else saveTimers.set(tab.id, setTimeout(write, 400))
+  clearTimeout(saveTimers.get(tab.id)?.timer)
+  if (now) void write()
+  else saveTimers.set(tab.id, { timer: setTimeout(write, 400), write })
+}
+
+/** Saves every tab whose text is waiting to be saved, at once. */
+export async function flushTabs() {
+  const waiting = [...saveTimers.values()]
+  for (const { timer } of waiting) clearTimeout(timer)
+  await Promise.all(waiting.map(({ write }) => write()))
+}
+
+/** How many unsaved row changes all tabs hold together. */
+export function unsavedChanges(): number {
+  return get().tabs.reduce((n, t) => n + draftSize(t.draft), 0)
 }
 
 function updateTab(id: string, change: Partial<Tab> | ((tab: Tab) => Partial<Tab>)) {
@@ -768,7 +840,7 @@ function closeNow(id: string) {
   freeResults(tab)
   forgetRowSelection()
   forgetEditor(tab.id)
-  clearTimeout(saveTimers.get(tab.id))
+  clearTimeout(saveTimers.get(tab.id)?.timer)
   const rest = tabs.filter((t) => t.id !== id)
   const next = rest[Math.min(index, rest.length - 1)]
   set((s) => ({
@@ -888,6 +960,10 @@ async function textToRun(
   return { script: tab.sql.slice(range.start, range.end), offset: range.start }
 }
 
+/**
+ * The tab's session, connecting if needed. A failure to connect is shown in
+ * the tab's results, where the user is looking, not only in the status bar.
+ */
 async function sessionFor(tab: Tab): Promise<{ profile: Profile; session: SessionInfo } | null> {
   const profile = profileById(tab.profileId)
   if (!profile) {
@@ -901,7 +977,28 @@ async function sessionFor(tab: Tab): Promise<{ profile: Profile; session: Sessio
     if (get().message?.text.startsWith('Connecting to ')) set({ message: null })
     return { profile, session }
   } catch (err) {
-    if (!(isQsError(err) && err.kind === 'cancelled')) say(errorText(err), true)
+    if (get().message?.text.startsWith('Connecting to ')) set({ message: null })
+    if (isQsError(err) && err.kind === 'cancelled') return null
+    const error: QsError = isQsError(err) ? err : { kind: 'internal', message: errorText(err) }
+    if (tab.run) freeResults(tab)
+    updateTab(tab.id, {
+      view: 'results',
+      run: {
+        status: 'failed',
+        runId: null,
+        script: '',
+        offset: 0,
+        rowCap: null,
+        starts: [],
+        statements: [],
+        results: [],
+        shown: 0,
+        elapsedMs: null,
+        error: { kind: 'connect', message: `Could not connect to ${profile.name}: ${errorText(error)}` },
+        errorIndex: null,
+        errorAt: null,
+      },
+    })
     return null
   }
 }
@@ -923,8 +1020,13 @@ export async function runActive(mode: 'statement' | 'all') {
     say(errorText(err), true)
     return
   }
-  if (!text || text.script.trim() === '') return
+  if (!text || text.script.trim() === '') {
+    say(mode === 'all' ? 'There is nothing to run.' : 'There is no statement at the cursor to run.')
+    return
+  }
   const { script, offset } = text
+  // Show which statement runs: with the cursor between two, it may not be obvious.
+  if (mode === 'statement' && !selectionIn(tab.id)) editorHooks.flash(tab.id, offset, offset + script.length)
   unlessDraft(tab.id, 'run the query', () => void runScript(tab.id, script, offset, ROW_CAP))
 }
 
@@ -934,6 +1036,18 @@ export async function runAgainUncapped() {
   const run = tab?.run
   if (!tab || !run || busy(tab)) return
   unlessDraft(tab.id, 'run the query again', () => void runScript(tab.id, run.script, run.offset, null))
+}
+
+/** Runs the front tab's last script again as it was (or, when it never started, the statement at the cursor). */
+export async function runAgain() {
+  const tab = activeTab()
+  const run = tab?.run
+  if (!tab || !run || busy(tab)) return
+  if (run.script === '') {
+    await runActive('statement')
+    return
+  }
+  unlessDraft(tab.id, 'run the query again', () => void runScript(tab.id, run.script, run.offset, run.rowCap))
 }
 
 /**
@@ -1065,6 +1179,7 @@ async function runScript(
             void loadEditTargets(tab.id)
             break
           case 'failed':
+            if (event.error.kind === 'closed') forgetSession(session.id)
             updateRun(tab.id, (r) => {
               const error = event.error
               let errorAt: number | null = null
@@ -1106,9 +1221,12 @@ async function runScript(
       })
       return
     }
+    if (isQsError(err) && err.kind === 'closed') forgetSession(session.id)
     if (previous) freeResults({ ...tab, run: previous })
-    updateRun(tab.id, () => ({ status: 'failed', error: isQsError(err) ? err : null }))
-    if (!isQsError(err)) say(errorText(err), true)
+    updateRun(tab.id, () => ({
+      status: 'failed',
+      error: isQsError(err) ? err : { kind: 'internal', message: errorText(err) },
+    }))
   }
 }
 
@@ -1172,7 +1290,11 @@ export async function explainActive() {
     say(errorText(err), true)
     return
   }
-  if (!text || text.script.trim() === '') return
+  if (!text || text.script.trim() === '') {
+    say('There is no statement at the cursor to explain.')
+    return
+  }
+  if (!selectionIn(tab.id)) editorHooks.flash(tab.id, text.offset, text.offset + text.script.length)
   const sql = text.script
   updateTab(tab.id, { view: 'plan', plan: { status: 'loading', sql } })
   try {
@@ -1304,6 +1426,19 @@ export function discardDraft(tabId: string) {
   updateTab(tabId, { draft: null })
 }
 
+/** Discards a tab's unsaved row changes, once the user agrees. */
+export function askDiscardDraft(tabId: string) {
+  const n = draftSize(get().tabs.find((t) => t.id === tabId)?.draft ?? null)
+  if (n === 0) return
+  openDialog({
+    kind: 'confirm',
+    title: 'Discard unsaved changes?',
+    message: `${n} change${n === 1 ? '' : 's'} to this result's rows will be lost. Nothing has been sent to the database.`,
+    confirmLabel: 'Discard changes',
+    run: () => discardDraft(tabId),
+  })
+}
+
 /** Takes one reviewed change back out of the draft, and reviews what is left. */
 export async function dropEdit(tabId: string, edit: RowEdit, index: number) {
   const draft = get().tabs.find((t) => t.id === tabId)?.draft
@@ -1327,7 +1462,7 @@ export async function dropEdit(tabId: string, edit: RowEdit, index: number) {
 /** Shows the statements the front tab's draft would run, for review. */
 export async function reviewDraft() {
   // A cell still being edited is kept first, so the review shows it.
-  document.querySelector<HTMLInputElement>('input[data-cell-editor]')?.blur()
+  document.querySelector<HTMLElement>('[data-cell-editor]')?.blur()
   const tab = activeTab()
   const draft = tab?.draft
   if (!tab || !draft) {
@@ -1410,25 +1545,38 @@ export async function loadNode(node: NodeRef, force = false) {
         const open = Object.entries(get().sessions).find(([k]) =>
           k.startsWith(`${node.profileId}\u0000`),
         )?.[1]
-        const session = open ?? (await ensureSession(node.profileId, null))
-        const listed = await ipc.listDatabases(session.id)
+        let session = open ?? (await ensureSession(node.profileId, null))
+        let listed: string[]
+        try {
+          listed = await ipc.listDatabases(session.id)
+        } catch (err) {
+          if (!isQsError(err) || err.kind !== 'closed') throw err
+          forgetSession(session.id)
+          session = await ensureSession(node.profileId, null)
+          listed = await ipc.listDatabases(session.id)
+        }
         const databases = listed.length > 0 ? listed : session.database ? [session.database] : []
         setLoaded(key, { status: 'ready', databases })
         break
       }
       case 'database': {
-        const session = await ensureSession(node.profileId, node.database)
-        setLoaded(key, { status: 'ready', schemas: await ipc.listSchemas(session.id) })
+        const schemas = await withSession(node.profileId, node.database, (session) =>
+          ipc.listSchemas(session.id),
+        )
+        setLoaded(key, { status: 'ready', schemas })
         break
       }
       case 'schema': {
-        const session = await ensureSession(node.profileId, node.database)
-        setLoaded(key, { status: 'ready', objects: await ipc.listObjects(session.id, node.schema) })
+        const objects = await withSession(node.profileId, node.database, (session) =>
+          ipc.listObjects(session.id, node.schema),
+        )
+        setLoaded(key, { status: 'ready', objects })
         break
       }
       case 'object': {
-        const session = await ensureSession(node.profileId, node.database)
-        const columns = await ipc.listColumns(session.id, node.schema, node.object.name)
+        const columns = await withSession(node.profileId, node.database, (session) =>
+          ipc.listColumns(session.id, node.schema, node.object.name),
+        )
         setLoaded(key, { status: 'ready', columns })
         break
       }

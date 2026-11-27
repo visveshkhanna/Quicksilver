@@ -7,9 +7,9 @@ import { formatIn } from '../features/editor/SqlEditor'
 import { bindingFor, currentPlatform, tabJump } from '../keymap/keymap'
 import {
   activeTab,
+  askDiscardDraft,
   cancelActive,
   closeTab,
-  discardDraft,
   disconnectProfile,
   draftSize,
   errorText,
@@ -125,7 +125,7 @@ export const COMMANDS: readonly Command[] = [
     enabled: (s) => draftSize(activeTab(s)?.draft ?? null) > 0,
     run: () => {
       const tab = activeTab()
-      if (tab) discardDraft(tab.id)
+      if (tab) askDiscardDraft(tab.id)
     },
   },
   {
