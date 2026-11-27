@@ -147,6 +147,14 @@ All notable changes are recorded here. The format follows
 
 ### Fixed
 
+- A saved password is read from the OS keychain once a run and then held in
+  memory, so opening another database or reconnecting no longer makes macOS
+  ask to allow keychain access each time. A password typed and accepted is
+  used for the rest of the run even when it was not saved. Renaming or
+  moving a connection without a saved password no longer touches the
+  keychain.
+- Indexing many databases for `Mod+P` refreshes the cached list at most
+  twice a second instead of after every database.
 - A connection the server closed is reconnected on the next run (catalog
   reads retry by themselves) instead of failing with "closed" until the
   app is restarted.

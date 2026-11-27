@@ -66,6 +66,7 @@ pub async fn connect_profile(
     database: Option<String>,
     password: Option<String>,
 ) -> Result<SessionInfo> {
+    let typed = password.clone();
     let config = saved::connection_config(&store, &id, database, password).await?;
     // Read-write connections ask before a script changes the schema; read-only
     // ones are refused writes by the server; full ones run everything.
@@ -73,6 +74,11 @@ pub async fn connect_profile(
         confirm_schema_changes: store.profile(&id)?.fields.mode == qs_store::Mode::ReadWrite,
     };
     let info = service.connect_with(&config, policy).await?;
+    if let Some(password) = typed {
+        // The server took it: the next session on this profile uses it too,
+        // whether or not it was saved in the keychain.
+        store.remember_for_run(&id, &password);
+    }
     let database = info.database.clone();
     let (service, store, session) = (service.inner().clone(), Arc::clone(&store), info.id);
     tauri::async_runtime::spawn(async move {

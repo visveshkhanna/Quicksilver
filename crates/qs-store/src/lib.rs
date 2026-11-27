@@ -1,7 +1,9 @@
 //! What Quicksilver keeps between runs.
 //!
 //! - Connection profiles, in `profiles.json` ([`profiles`]).
-//! - Passwords, only in the OS keychain ([`secrets`]).
+//! - Passwords, only in the OS keychain ([`secrets`]). Each one is read
+//!   from it at most once a run and then held in memory, so opening more
+//!   sessions does not ask the OS again.
 //! - History, saved queries, editor buffers, layout and the catalog cache
 //!   for the `Mod+K` switcher, in `state.db` ([`state`]).
 //!
@@ -15,6 +17,7 @@ pub mod profiles;
 pub mod secrets;
 pub mod state;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -84,6 +87,9 @@ pub struct Store {
     profiles: Mutex<ProfileBook>,
     state: Mutex<State>,
     secrets: Box<dyn Secrets>,
+    /// Passwords known this run, by profile id: read from the keychain once,
+    /// or typed and accepted by the server. Never written anywhere.
+    known: Mutex<HashMap<String, String>>,
     notices: Vec<Notice>,
 }
 
@@ -98,6 +104,7 @@ impl Store {
             profiles: Mutex::new(profiles),
             state: Mutex::new(state),
             secrets,
+            known: Mutex::new(HashMap::new()),
             notices: profile_notice.into_iter().chain(state_notice).collect(),
         })
     }
@@ -129,7 +136,7 @@ impl Store {
         password: PasswordChange,
     ) -> Result<Profile> {
         let profile = self.book().create(fields, now_ms())?;
-        if let Err(err) = self.apply_password(&profile, &password) {
+        if let Err(err) = self.apply_password(&profile, None, &password) {
             // Do not leave a profile that cannot connect the way it says.
             let _ = self.book().delete(&profile.id);
             return Err(err);
@@ -151,7 +158,7 @@ impl Store {
             ..current
         };
         // The keychain first: if it fails, the profile is unchanged.
-        self.apply_password(&next, &password)?;
+        self.apply_password(&next, Some(&current.fields.auth), &password)?;
         book.update(id, fields, now_ms())
     }
 
@@ -159,13 +166,31 @@ impl Store {
     /// holds for it.
     pub fn delete_profile(&self, id: &str) -> Result<()> {
         self.secrets.delete(id)?;
+        self.known().remove(id);
         self.book().delete(id)?;
         self.state().forget_profile(id)
     }
 
-    /// The password saved in the keychain for profile `id`, if any.
+    /// The password to connect profile `id` with: one already known this
+    /// run, else the one saved in the keychain, if any. The keychain is
+    /// asked only the first time, since each read may make the OS ask the
+    /// user to allow it.
     pub fn saved_password(&self, id: &str) -> Result<Option<String>> {
-        self.secrets.get(id)
+        if let Some(password) = self.known().get(id) {
+            return Ok(Some(password.clone()));
+        }
+        let saved = self.secrets.get(id)?;
+        if let Some(password) = &saved {
+            self.known().insert(id.to_owned(), password.clone());
+        }
+        Ok(saved)
+    }
+
+    /// Holds `password` for profile `id` until the app quits, without saving
+    /// it: one the user typed and the server accepted, so the next session
+    /// on the profile does not ask again.
+    pub fn remember_for_run(&self, id: &str, password: &str) {
+        self.known().insert(id.to_owned(), password.to_owned());
     }
 
     /// The state database. Hold the guard only for the call at hand.
@@ -181,15 +206,43 @@ impl Store {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn apply_password(&self, profile: &Profile, change: &PasswordChange) -> Result<()> {
+    fn known(&self) -> MutexGuard<'_, HashMap<String, String>> {
+        self.known
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Applies `change` to `profile`'s saved password. `before` is how the
+    /// profile got its password until now (`None` for a new profile).
+    fn apply_password(
+        &self,
+        profile: &Profile,
+        before: Option<&Auth>,
+        change: &PasswordChange,
+    ) -> Result<()> {
+        let id = &profile.id;
         if profile.fields.auth != Auth::Keychain {
+            self.known().remove(id);
             // A profile that does not use the keychain keeps nothing there.
-            return self.secrets.delete(&profile.id);
+            // Only one that used it can have an entry to forget, and not
+            // touching the keychain otherwise spares an OS prompt on a
+            // rename or a move to another folder.
+            return match before {
+                Some(Auth::Keychain) => self.secrets.delete(id),
+                _ => Ok(()),
+            };
         }
         match change {
             PasswordChange::Keep => Ok(()),
-            PasswordChange::Set { password } => self.secrets.set(&profile.id, password),
-            PasswordChange::Clear => self.secrets.delete(&profile.id),
+            PasswordChange::Set { password } => {
+                self.secrets.set(id, password)?;
+                self.known().insert(id.clone(), password.clone());
+                Ok(())
+            }
+            PasswordChange::Clear => {
+                self.known().remove(id);
+                self.secrets.delete(id)
+            }
         }
     }
 }
@@ -285,6 +338,91 @@ mod tests {
         store.delete_profile(&profile.id)?;
         assert_eq!(secrets.get(&profile.id)?, None);
         assert!(store.profiles().is_empty());
+        Ok(())
+    }
+
+    /// Counts how often the keychain is touched.
+    #[derive(Default)]
+    struct Counting {
+        inner: MemorySecrets,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl Counting {
+        fn calls(&self) -> usize {
+            self.calls.load(std::sync::atomic::Ordering::SeqCst)
+        }
+        fn touch(&self) {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    struct CountingRef(Arc<Counting>);
+
+    impl Secrets for CountingRef {
+        fn get(&self, account: &str) -> Result<Option<String>> {
+            self.0.touch();
+            self.0.inner.get(account)
+        }
+        fn set(&self, account: &str, password: &str) -> Result<()> {
+            self.0.touch();
+            self.0.inner.set(account, password)
+        }
+        fn delete(&self, account: &str) -> Result<()> {
+            self.0.touch();
+            self.0.inner.delete(account)
+        }
+    }
+
+    #[test]
+    fn the_keychain_is_read_once_a_run() -> Result<()> {
+        let secrets = Arc::new(Counting::default());
+        secrets.inner.set("saved-earlier", "s3cret")?;
+        let (_dir, store) = open(Box::new(CountingRef(secrets.clone())))?;
+        for _ in 0..3 {
+            assert_eq!(
+                store.saved_password("saved-earlier")?.as_deref(),
+                Some("s3cret")
+            );
+        }
+        assert_eq!(secrets.calls(), 1);
+
+        // A password typed and accepted is used for later sessions, unsaved.
+        store.remember_for_run("typed", "hunter2");
+        assert_eq!(store.saved_password("typed")?.as_deref(), Some("hunter2"));
+        assert_eq!(secrets.inner.get("typed")?, None);
+        assert_eq!(secrets.calls(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn saving_a_profile_without_a_password_leaves_the_keychain_alone() -> Result<()> {
+        let secrets = Arc::new(Counting::default());
+        let (_dir, store) = open(Box::new(CountingRef(secrets.clone())))?;
+        let mut plain = keychain_fields();
+        plain.auth = Auth::NoPassword;
+        let profile = store.create_profile(plain.clone(), PasswordChange::Keep)?;
+        plain.project = Some("work/billing".into());
+        store.update_profile(&profile.id, plain, PasswordChange::Keep)?;
+        assert_eq!(secrets.calls(), 0);
+
+        // A changed password replaces the one held for the run.
+        store.update_profile(
+            &profile.id,
+            keychain_fields(),
+            PasswordChange::Set {
+                password: "new".into(),
+            },
+        )?;
+        store.remember_for_run(&profile.id, "old");
+        store.update_profile(
+            &profile.id,
+            keychain_fields(),
+            PasswordChange::Set {
+                password: "newer".into(),
+            },
+        )?;
+        assert_eq!(store.saved_password(&profile.id)?.as_deref(), Some("newer"));
         Ok(())
     }
 

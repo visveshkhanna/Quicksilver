@@ -661,6 +661,8 @@ const indexed = new Map<string, number>()
 const reindex = new Set<string>()
 /** How long a database's cached table list is trusted before a search reads it again. */
 const INDEX_FRESH_MS = 60 * 60_000
+/** How often indexing shows what it has read so far. */
+const INDEX_SHOW_MS = 500
 
 /** When `database`'s tables were last read into the catalog cache, if ever. */
 function indexedAt(profileId: string, database: string): number | null {
@@ -705,15 +707,23 @@ export async function indexProfile(profileId: string, force = reindex.has(profil
     let done = 0
     progress(done, databases.length)
     const queue = [...databases]
+    // Results show up as they arrive, but the whole cache is read back at
+    // most every half second: once per database is a lot of re-rendering on
+    // a server with hundreds of them.
+    let shownAt = 0
     const worker = async () => {
       for (let database = queue.shift(); database !== undefined; database = queue.shift()) {
         // A database this user may not open is skipped; the rest still index.
         await saved.indexDatabase(session.id, profileId, database).catch(() => {})
         progress(++done, databases.length)
-        await reloadCatalog()
+        if (Date.now() - shownAt >= INDEX_SHOW_MS) {
+          shownAt = Date.now()
+          await reloadCatalog()
+        }
       }
     }
     await Promise.all([worker(), worker()])
+    await reloadCatalog()
   } catch {
     // Not connected (or the password prompt was dismissed): try again next time.
     indexed.delete(profileId)
