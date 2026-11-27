@@ -19,7 +19,7 @@ function StatementList({ statements, onDrop }: { statements: string[]; onDrop?: 
               type="button"
               onClick={() => onDrop(i)}
               title="Take this change out; the rest stay"
-              className="shrink-0 self-start rounded px-1.5 font-sans text-[11px] text-muted hover:bg-raised hover:text-fg"
+              className="shrink-0 self-start rounded border border-border bg-raised px-1.5 font-sans text-[11px] hover:bg-border/60"
             >
               Undo
             </button>
@@ -54,14 +54,11 @@ export function ReviewChanges() {
           }
         />
         {dialog.error && (
-          <p
-            role="alert"
-            className="m-0 rounded border border-[#e5484d]/40 bg-[#e5484d]/8 px-3 py-2 text-[#e5484d]"
-          >
+          <p role="alert" className="m-0 rounded border border-danger/40 bg-danger/8 px-3 py-2 text-danger">
             {dialog.error}
           </p>
         )}
-        <div className="flex justify-end gap-2">
+        <div className="-mx-4 -mb-4 mt-1 flex justify-end gap-2 border-t border-border px-4 py-3">
           <Button onClick={closeDialog} autoFocus>
             Back to editing
           </Button>
@@ -87,7 +84,7 @@ export function ConfirmRun() {
           asking.
         </p>
         <StatementList statements={dialog.statements} />
-        <div className="flex justify-end gap-2">
+        <div className="-mx-4 -mb-4 mt-1 flex justify-end gap-2 border-t border-border px-4 py-3">
           <Button onClick={closeDialog}>Don’t run</Button>
           <Button
             kind="danger"
@@ -162,7 +159,7 @@ export function InsertRow() {
         <p className="m-0 text-[12px] text-muted">
           Empty fields are left out, so the table’s defaults apply. The row is added to the changes to review.
         </p>
-        <div className="flex justify-end gap-2">
+        <div className="-mx-4 -mb-4 mt-1 flex justify-end gap-2 border-t border-border px-4 py-3">
           <Button onClick={closeDialog}>Cancel</Button>
           <Button kind="primary" type="submit">
             Add to changes
@@ -181,7 +178,7 @@ export function Confirm() {
     <Modal title={dialog.title} onClose={closeDialog} width={480}>
       <div className="flex flex-col gap-3 p-4">
         <p className="m-0">{dialog.message}</p>
-        <div className="flex justify-end gap-2">
+        <div className="-mx-4 -mb-4 mt-1 flex justify-end gap-2 border-t border-border px-4 py-3">
           <Button onClick={closeDialog}>Cancel</Button>
           <Button
             kind="danger"
@@ -234,7 +231,7 @@ export function Prompt() {
             onFocus={(e) => e.currentTarget.select()}
             list={dialog.suggestions ? 'prompt-suggestions' : undefined}
             aria-invalid={problem !== null}
-            className="rounded border border-border bg-bg px-2 py-1 outline-none focus:border-accent aria-invalid:border-[#e5484d]"
+            className="rounded border border-border bg-bg px-2 py-1 outline-none focus:border-accent aria-invalid:border-danger"
           />
         </label>
         {dialog.suggestions && (
@@ -245,11 +242,11 @@ export function Prompt() {
           </datalist>
         )}
         {problem && (
-          <p role="alert" className="m-0 text-[12px] text-[#e5484d]">
+          <p role="alert" className="m-0 text-[12px] text-danger">
             {problem}
           </p>
         )}
-        <div className="flex justify-end gap-2">
+        <div className="-mx-4 -mb-4 mt-1 flex justify-end gap-2 border-t border-border px-4 py-3">
           <Button onClick={closeDialog}>Cancel</Button>
           <Button kind="primary" type="submit">
             {dialog.confirmLabel}

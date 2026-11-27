@@ -64,7 +64,7 @@ export function ImportDbeaver() {
     <Modal title="Import from DBeaver" onClose={closeDialog} width={640}>
       <div className="flex max-h-[65vh] flex-col gap-3 overflow-auto p-4">
         {error && (
-          <p role="alert" className="m-0 text-[#e5484d]">
+          <p role="alert" className="m-0 text-danger">
             {error}
           </p>
         )}
@@ -107,7 +107,7 @@ export function ImportDbeaver() {
                     <label
                       key={c.key}
                       className={`flex items-center gap-2 border-b border-border/60 px-2 py-1.5 last:border-0 ${
-                        importable(c) ? '' : 'opacity-50'
+                        importable(c) ? '' : 'text-muted'
                       }`}
                     >
                       <input
@@ -118,8 +118,14 @@ export function ImportDbeaver() {
                       />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate">{c.name}</span>
-                        <span className="block truncate text-[11px] text-muted">
-                          {c.skipped ?? (c.alreadyImported ? 'Already imported' : c.summary)}
+                        <span
+                          className={`block truncate text-[11px] ${c.skipped ? 'text-warning' : 'text-muted'}`}
+                        >
+                          {c.skipped
+                            ? `Skipped: ${c.skipped}`
+                            : c.alreadyImported
+                              ? 'Already imported'
+                              : c.summary}
                         </span>
                       </span>
                       <span className="shrink-0 text-[11px] text-muted">{c.engine ?? ''}</span>
@@ -128,11 +134,19 @@ export function ImportDbeaver() {
                 </div>
               ))}
             </div>
-            <label className="flex items-center gap-2">
-              <input type="checkbox" checked={passwords} onChange={(e) => setPasswords(e.target.checked)} />
-              Save their passwords in the OS keychain
-              <span className="text-[12px] text-muted">
-                ({withPasswords} of the chosen have one; without, you are asked when connecting)
+            <label className="flex items-start gap-2">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={passwords}
+                onChange={(e) => setPasswords(e.target.checked)}
+              />
+              <span className="flex flex-col">
+                Save their passwords in the OS keychain
+                <span className="text-[12px] text-muted">
+                  {withPasswords} of the chosen have one saved in DBeaver. Without one, you are asked when
+                  connecting.
+                </span>
               </span>
             </label>
             {scan.notes.length > 0 && (

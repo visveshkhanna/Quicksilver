@@ -9,6 +9,7 @@ import {
   autocompletion,
   closeBrackets,
   closeBracketsKeymap,
+  closeCompletion,
   completionKeymap,
 } from '@codemirror/autocomplete'
 import { defaultKeymap, history, historyKeymap, indentWithTab, isolateHistory } from '@codemirror/commands'
@@ -83,6 +84,10 @@ export function flashRange(id: string, from: number, to: number) {
 }
 
 editorHooks.flash = flashRange
+editorHooks.closeCompletion = (id) => {
+  const view = views.get(id)
+  if (view) closeCompletion(view)
+}
 
 // --- Looks ---------------------------------------------------------------------
 
@@ -113,13 +118,17 @@ const theme = EditorView.theme({
   },
   '.cm-cursor': { borderLeftColor: 'var(--color-fg)' },
   '.cm-ran': { backgroundColor: 'color-mix(in srgb, var(--color-accent) 18%, transparent)' },
-  '.cm-error-at': { textDecoration: 'underline wavy #e5484d', textUnderlineOffset: '3px' },
+  '.cm-error-at': { textDecoration: 'underline wavy var(--color-danger)', textUnderlineOffset: '3px' },
   '.cm-tooltip': {
-    backgroundColor: 'var(--color-panel)',
+    backgroundColor: 'var(--color-popover)',
     border: '1px solid var(--color-border)',
     borderRadius: '6px',
     overflow: 'hidden',
+    boxShadow: '0 8px 24px rgb(0 0 0 / 0.18)',
   },
+  '.cm-tooltip-autocomplete > ul': { padding: '3px', fontFamily: 'var(--font-mono)' },
+  '.cm-tooltip-autocomplete > ul > li': { padding: '2px 8px !important', borderRadius: '4px' },
+  '.cm-completionMatchedText': { textDecoration: 'none', fontWeight: '600', color: 'var(--color-accent)' },
   '.cm-tooltip-autocomplete > ul > li[aria-selected]': {
     backgroundColor: 'color-mix(in srgb, var(--color-accent) 22%, transparent)',
     color: 'var(--color-fg)',

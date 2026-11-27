@@ -22,7 +22,7 @@ export function PasswordPrompt() {
       >
         {who && <p className="text-muted">{who}</p>}
         {error && (
-          <p role="alert" className="m-0 text-[12px] break-words text-[#e5484d] select-text">
+          <p role="alert" className="m-0 text-[12px] break-words text-danger select-text">
             {error}
           </p>
         )}

@@ -44,20 +44,21 @@ export function StatusBar() {
   return (
     <footer className="flex h-6 shrink-0 items-center gap-3 border-t border-border bg-panel px-3 text-[11px] text-muted">
       <span>{parts.join(' · ') || 'Ready'}</span>
+      {message && <span aria-hidden className="h-3 w-px shrink-0 bg-border" />}
       {message && (
         <span role="status" className="min-w-0 truncate">
           <button
             type="button"
             title="Dismiss"
             onClick={() => clearMessage()}
-            className={`max-w-full truncate text-left ${message.error ? 'text-[#e5484d]' : ''}`}
+            className={`max-w-full truncate text-left ${message.error ? 'text-danger' : ''}`}
           >
             {message.text}
           </button>
         </span>
       )}
       {notice && (
-        <button type="button" onClick={() => dismissNotice(0)} className="text-[#e2a336]" title="Dismiss">
+        <button type="button" onClick={() => dismissNotice(0)} className="text-warning" title="Dismiss">
           {notice.kind === 'recovered'
             ? `${notice.file} could not be read; it was kept as ${notice.keptAs}.`
             : `${notice.file} is from a newer Quicksilver; changes are not saved to it.`}

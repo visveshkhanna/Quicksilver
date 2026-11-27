@@ -35,9 +35,15 @@ export function Inspector() {
                     <span className="font-semibold text-fg">{c.name}</span>
                     {c.dbType}
                   </dt>
-                  <dd className="m-0 font-mono text-[12px] break-all whitespace-pre-wrap select-text">
+                  <dd
+                    className={`m-0 font-mono text-[12px] whitespace-pre-wrap select-text ${
+                      c.typeTag === 'json' || c.typeTag === 'bytes' ? 'break-all' : '[overflow-wrap:anywhere]'
+                    }`}
+                  >
                     {value === null ? (
                       <span className="text-muted italic">NULL</span>
+                    ) : value === '' ? (
+                      <span className="text-muted italic">empty string</span>
                     ) : (
                       pretty(value, c.typeTag)
                     )}
@@ -117,15 +123,19 @@ function NodeDetails({ node }: { node: NodeRef }) {
           <tbody>
             {loaded.columns.map((c) => (
               <tr key={c.name} className="border-t border-border/60">
-                <td className="py-1 pr-2">
+                <td className="py-1 pr-2 align-top [overflow-wrap:anywhere]">
                   {c.name}
                   {c.primaryKeyPosition !== null && (
                     <span className="ml-1 text-[10px] font-semibold text-accent">PK</span>
                   )}
                 </td>
-                <td className="py-1 text-muted">
+                <td className="py-1 align-top text-muted">
                   {c.dbType}
-                  {c.nullable ? '' : ' not null'}
+                  {!c.nullable && (
+                    <span className="ml-1 rounded bg-raised px-1 text-[10px] whitespace-nowrap">
+                      not null
+                    </span>
+                  )}
                   {c.default !== null && <span className="block truncate">default {c.default}</span>}
                 </td>
               </tr>

@@ -315,7 +315,7 @@ export function ConnectionForm({
           ))}
         </div>
 
-        <div className="grid max-h-[60vh] grid-cols-[130px_1fr] items-center gap-x-3 gap-y-2.5 overflow-auto p-4">
+        <div className="grid max-h-[60vh] min-h-[340px] grid-cols-[130px_1fr] content-start items-start gap-x-3 gap-y-2.5 overflow-auto p-4">
           {section === 'connection' && (
             <>
               <Label htmlFor="cf-url">URL</Label>
@@ -323,6 +323,7 @@ export function ConnectionForm({
                 <input
                   id="cf-url"
                   ref={urlInput}
+                  data-autofocus={pasteUrl || undefined}
                   value={urlDraft ?? formatUrl(fields)}
                   onChange={(e) => typeUrl(e.target.value, false)}
                   onPaste={(e) => {
@@ -348,9 +349,9 @@ export function ConnectionForm({
                   placeholder="Paste a URL: postgres://user@host:5432/database"
                   spellCheck={false}
                   autoComplete="off"
-                  className={`${INPUT} font-mono text-[12px] aria-invalid:border-[#e5484d]`}
+                  className={`${INPUT} font-mono text-[12px] aria-invalid:border-danger`}
                 />
-                <p id="cf-url-help" className={`text-[11px] ${urlError ? 'text-[#e5484d]' : 'text-muted'}`}>
+                <p id="cf-url-help" className={`text-[11px] ${urlError ? 'text-danger' : 'text-muted'}`}>
                   {urlError ?? 'Paste or edit a URL to fill in the fields below. JDBC URLs work too.'}
                 </p>
               </div>
@@ -358,6 +359,7 @@ export function ConnectionForm({
               <input
                 id="cf-name"
                 ref={nameInput}
+                data-autofocus={!pasteUrl || undefined}
                 required
                 value={fields.name}
                 onChange={(e) => {
@@ -422,7 +424,7 @@ export function ConnectionForm({
                         }
                       }}
                       placeholder={String(engine?.port ?? '')}
-                      className={`${INPUT} w-20 aria-invalid:border-[#e5484d]`}
+                      className={`${INPUT} w-20 aria-invalid:border-danger`}
                     />
                   </div>
                   <Label htmlFor="cf-user">User</Label>
@@ -595,7 +597,7 @@ export function ConnectionForm({
         <div className="flex items-center gap-2 border-t border-border px-4 py-3">
           <p
             role="status"
-            className={`max-h-20 min-w-0 flex-1 overflow-auto text-[12px] break-words select-text ${status?.ok === false ? 'text-[#e5484d]' : 'text-muted'}`}
+            className={`max-h-20 min-w-0 flex-1 overflow-auto text-[12px] break-words select-text ${status?.ok === false ? 'text-danger' : 'text-muted'}`}
           >
             {status?.text}
           </p>
@@ -617,7 +619,7 @@ const INPUT =
 
 function Label({ children, htmlFor }: { children: ReactNode; htmlFor?: string }) {
   return (
-    <label htmlFor={htmlFor} className="text-right text-muted">
+    <label htmlFor={htmlFor} className="pt-[5px] text-right text-muted">
       {children}
     </label>
   )
@@ -643,7 +645,7 @@ function Swatch({
       aria-checked={selected}
       aria-label={label}
       onClick={onClick}
-      className={`flex size-6 items-center justify-center rounded ${selected ? 'ring-2 ring-accent' : 'hover:bg-raised'}`}
+      className={`flex size-6 items-center justify-center rounded-full ${selected ? 'ring-2 ring-accent' : 'hover:bg-raised'}`}
     >
       {children}
     </button>

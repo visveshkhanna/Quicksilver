@@ -9,8 +9,8 @@ export function PlanView({ plan }: { plan: PlanState }) {
   if (plan.status === 'loading') return <p className="px-3 py-2 text-muted">Explaining…</p>
   if (plan.status === 'failed') {
     return (
-      <div role="alert" className="m-2 rounded border border-[#e5484d]/40 bg-[#e5484d]/8 px-3 py-2">
-        <p className="font-semibold text-[#e5484d]">{plan.error}</p>
+      <div role="alert" className="m-2 rounded border border-danger/40 bg-danger/8 px-3 py-2">
+        <p className="font-semibold text-danger">{plan.error}</p>
       </div>
     )
   }

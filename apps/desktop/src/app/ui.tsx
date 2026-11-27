@@ -28,10 +28,10 @@ export function Modal({
   return (
     <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-black/30" />
+        <Dialog.Overlay className="fixed inset-0 bg-overlay" />
         <Dialog.Content
-          className={`fixed left-1/2 -translate-x-1/2 rounded-lg border border-border bg-bg shadow-2xl outline-none ${
-            top ? 'top-[12%]' : 'top-1/2 -translate-y-1/2'
+          className={`fixed left-1/2 -translate-x-1/2 rounded-lg border border-border bg-popover shadow-2xl outline-none ${
+            top ? 'top-[12%]' : 'top-[10vh] max-h-[80vh] overflow-auto'
           }`}
           style={{ width: `min(${width}px, calc(100vw - 32px))` }}
           onEscapeKeyDown={onEscape}
@@ -83,7 +83,7 @@ export function Button({
   const look = {
     plain: 'border border-border bg-raised hover:bg-border/60',
     primary: 'bg-accent-solid text-white hover:brightness-110',
-    danger: 'border border-border text-[#e5484d] hover:bg-[#e5484d]/10',
+    danger: 'border border-danger/40 text-danger hover:bg-danger/10',
   }[kind]
   return (
     <button

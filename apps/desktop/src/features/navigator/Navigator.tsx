@@ -1,12 +1,13 @@
 import * as Menu from '@radix-ui/react-context-menu'
 import { type DragEvent, type HTMLAttributes, type ReactNode, useEffect, useState } from 'react'
 import { Icon, type IconName } from '../../app/icons'
-import { Kbd } from '../../app/Kbd'
+import { shortcutLabel } from '../../app/Kbd'
 import { DropItem, DropMenu, MenuItem as Item, MenuContent, MenuSeparator as Separator } from '../../app/menu'
 import { Button, ColorDot } from '../../app/ui'
 import * as ipc from '../../ipc/commands'
 import { dbeaverScan, type Profile } from '../../ipc/store'
 import type { ColumnInfo, DbObject } from '../../ipc/types'
+import { keysFor } from '../../keymap/keymap'
 import { copyText } from '../../lib/clipboard'
 import {
   askDisconnect,
@@ -285,6 +286,12 @@ export function Navigator() {
   const filter = useApp((s) => s.filter)
   const root = buildTree(profiles, folders)
   const { over, handlers } = useDropTarget(null)
+  const filterKeys = useApp((s) => shortcutLabel(keysFor('focus-navigator', s.overrides)))
+  const { matches } = useView()
+  const nothing =
+    filter !== '' &&
+    !root.profiles.some((p) => profileVisible(p, filter, matches)) &&
+    !root.folders.some((f) => folderVisible(f, filter, matches))
 
   // A search reads the tables of every database on connected connections.
   useEffect(() => {
@@ -310,11 +317,10 @@ export function Navigator() {
               e.currentTarget.blur()
             }
           }}
-          placeholder="Filter…"
+          placeholder={`Filter…${filterKeys ? `  ${filterKeys}` : ''}`}
           aria-label="Filter connections"
           className="min-w-0 flex-1 rounded border border-border bg-bg px-2 py-1 outline-none focus:border-accent"
         />
-        <Kbd id="focus-navigator" />
         <DropMenu
           trigger={
             <button
@@ -352,6 +358,14 @@ export function Navigator() {
           {...handlers}
         >
           <FolderContents folder={root} depth={0} />
+          {nothing && (
+            <div className="flex flex-col items-center gap-2 p-4 text-center text-muted">
+              <p className="m-0">Nothing matches “{filter}”.</p>
+              <button type="button" className="text-accent hover:underline" onClick={() => setFilter('')}>
+                Clear the filter
+              </button>
+            </div>
+          )}
         </div>
       )}
     </nav>
@@ -379,7 +393,7 @@ function FirstRun() {
     </Button>
   )
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-3 p-4 text-center text-muted">
+    <div className="flex flex-1 flex-col items-center justify-center gap-3 p-4 text-center text-muted [&_button]:w-full [&_button]:max-w-60">
       <p className="m-0">No connections yet.</p>
       {fromDbeaver > 0 && importButton}
       <Button
@@ -438,7 +452,7 @@ function FolderNode({ folder, depth }: { folder: Folder; depth: number }) {
               else arrowFocus(e)
             }}
             {...handlers}
-            className={`flex cursor-default items-center gap-1.5 py-[3px] pr-2 font-medium outline-none focus-visible:bg-accent/10 ${
+            className={`flex cursor-default items-center gap-1.5 py-[3px] pr-2 font-medium outline-none focus-visible:bg-accent/10 data-[state=open]:shadow-[inset_0_0_0_1px_var(--color-accent)] ${
               over ? 'bg-accent/20' : 'hover:bg-raised'
             }`}
             style={{ paddingLeft: 6 + depth * 14 }}
@@ -551,7 +565,7 @@ function Row({
         else arrowFocus(e)
       }}
       {...extra}
-      className={`flex cursor-default items-center gap-1.5 py-[3px] pr-2 outline-none focus-visible:bg-accent/10 ${
+      className={`flex cursor-default items-center gap-1.5 py-[3px] pr-2 outline-none focus-visible:bg-accent/10 data-[state=open]:shadow-[inset_0_0_0_1px_var(--color-accent)] ${
         selected ? 'bg-accent/15' : 'hover:bg-raised'
       }`}
       style={{ paddingLeft: 6 + depth * 14 }}
@@ -588,7 +602,7 @@ function Children({
   if (!open || !loaded) return null
   if (loaded.status === 'error') {
     return (
-      <div role="alert" className="px-6 py-1 text-[12px] text-[#e5484d]">
+      <div role="alert" className="px-6 py-1 text-[12px] text-danger">
         {loaded.error}
       </div>
     )
@@ -624,7 +638,7 @@ function ConnectionNode({ profile, depth }: { profile: Profile; depth: number })
           <>
             {profile.mode === 'readOnly' && 'read-only '}
             {connected && (
-              <span title="Connected" className="text-[#30a46c]">
+              <span title="Connected" className="text-success">
                 ●<span className="sr-only"> connected</span>
               </span>
             )}
@@ -802,7 +816,15 @@ function GroupNode({
   const open = useApp((s) => Boolean(s.expanded[key])) || filter !== ''
   return (
     <>
-      <Row node={node} depth={depth} expandable label={title} aside={objects.length} menu={null} />
+      <Row
+        node={node}
+        depth={depth}
+        expandable
+        lead={<Icon name="group" className="text-muted/70" />}
+        label={title}
+        aside={objects.length}
+        menu={null}
+      />
       {open &&
         objects.map((object) => (
           <ObjectNode
@@ -871,15 +893,21 @@ function ColumnLeaf({ column, depth }: { column: ColumnInfo; depth: number }) {
   return (
     <div
       className="flex items-center gap-1.5 py-[2px] pr-2 text-[12px]"
-      style={{ paddingLeft: 6 + depth * 14 + 18 }}
+      style={{ paddingLeft: 6 + depth * 14 + 12 }}
     >
-      <span className="truncate">{column.name}</span>
+      <Icon name={column.primaryKeyPosition !== null ? 'key' : 'column'} className="text-muted/70" />
+      <span className="max-w-[60%] shrink-0 truncate" title={column.name}>
+        {column.name}
+      </span>
       {column.primaryKeyPosition !== null && (
         <span title="Primary key" className="text-[10px] font-semibold text-accent">
           PK
         </span>
       )}
-      <span className="ml-auto truncate pl-2 text-muted">
+      <span
+        className="ml-auto min-w-0 truncate pl-2 text-muted"
+        title={`${column.dbType}${column.nullable ? '' : ' not null'}`}
+      >
         {column.dbType}
         {column.nullable ? '' : ' not null'}
       </span>

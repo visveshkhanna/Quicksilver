@@ -3,6 +3,7 @@
 
 import { useEffect, useMemo } from 'react'
 import { COMMANDS } from '../../app/commands'
+import { Icon, type IconName } from '../../app/icons'
 import { KeyCaps } from '../../app/Kbd'
 import { ColorDot } from '../../app/ui'
 import { hasBinding, keysFor } from '../../keymap/keymap'
@@ -100,6 +101,16 @@ export function DatabaseSwitcher() {
 
 const OPENABLE = new Set(['table', 'view', 'materializedView', 'foreignTable'])
 
+const KIND_ICONS: Record<string, IconName> = {
+  table: 'table',
+  foreignTable: 'table',
+  view: 'view',
+  materializedView: 'view',
+  function: 'function',
+  procedure: 'function',
+  sequence: 'sequence',
+}
+
 type Found = { profileId: string; database: string; schema: string; name: string; kind: string }
 
 /** Every table, view and routine known for any connection: the front tab's connection and database first. */
@@ -153,6 +164,7 @@ export function GoToObject() {
   const id = (o: Found) => `${o.profileId}\u0000${o.database}\u0000${o.schema}\u0000${o.name}`
   const items: PickItem[] = objects.map((o) => ({
     id: id(o),
+    lead: <Icon name={KIND_ICONS[o.kind] ?? 'table'} className="text-muted" />,
     label: `${o.schema}.${o.name}`,
     detail: `${several ? `${profileById(o.profileId)?.name ?? ''} / ` : ''}${o.database} · ${o.kind}`,
   }))

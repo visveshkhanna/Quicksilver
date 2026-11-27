@@ -13,7 +13,7 @@ export function Kbd({ id }: { id: string }) {
 /** Keys such as `Mod+K`, spelled for the platform. */
 export function KeyCaps({ keys }: { keys: string }) {
   return (
-    <kbd className="whitespace-nowrap rounded border border-border bg-raised px-1.5 py-0.5 font-mono text-[11px] text-muted">
+    <kbd className="inline-flex h-[18px] items-center whitespace-nowrap rounded border border-border bg-raised px-1.5 font-sans text-[11px] leading-none tracking-wide text-muted">
       {formatKeys(keys, platform)}
     </kbd>
   )

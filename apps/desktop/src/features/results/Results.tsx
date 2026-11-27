@@ -87,7 +87,7 @@ function RunSummary({ run }: { run: RunState }) {
       {run.status === 'running' && <span className="text-accent">Running…</span>}
       {parts.join(' · ')}
       {outcome?.capped && run.rowCap !== null && (
-        <span className="flex items-center gap-1.5 rounded bg-[#e2a336]/15 px-1.5 text-fg">
+        <span className="flex items-center gap-1.5 rounded bg-warning/15 px-1.5 text-fg">
           Stopped at {run.rowCap.toLocaleString()} rows
           <button
             type="button"
@@ -175,13 +175,15 @@ function EditBar({ tab, result }: { tab: Tab; result: ResultView }) {
       >
         Editable · rows named by {result.edit.byPrimaryKey ? 'primary key' : 'every value (no primary key)'}
       </span>
-      <span className="ml-auto flex min-w-0 items-center gap-2">
-        <Button small onClick={() => openDialog({ kind: 'insertRow', tabId: tab.id })}>
-          Add row
-        </Button>
+      <span className="ml-auto flex shrink-0 items-center gap-2">
+        <span className={changes > 0 ? '@max-[600px]:hidden' : ''}>
+          <Button small onClick={() => openDialog({ kind: 'insertRow', tabId: tab.id })}>
+            Add row
+          </Button>
+        </span>
         {changes > 0 && (
           <>
-            <span role="status" className="shrink-0 font-semibold text-[#b4561a]" title={breakdown(draft)}>
+            <span role="status" className="shrink-0 font-semibold text-warning" title={breakdown(draft)}>
               {changes} unsaved change{changes === 1 ? '' : 's'}
             </span>
             {/* New rows are not drawn in the grid, so say they are there. */}
@@ -250,10 +252,10 @@ function ErrorBox({ run }: { run: RunState }) {
   return (
     <div
       role="alert"
-      className="m-2 flex shrink-0 items-start gap-3 rounded border border-[#e5484d]/40 bg-[#e5484d]/8 px-3 py-2"
+      className="m-2 flex shrink-0 items-start gap-3 rounded border border-danger/40 bg-danger/8 px-3 py-2"
     >
       <div className="min-w-0 flex-1 select-text">
-        <p className="font-semibold break-words text-[#e5484d]">
+        <p className="font-semibold break-words text-danger">
           {prefix}
           {message}
         </p>

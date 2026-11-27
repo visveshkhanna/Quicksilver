@@ -142,7 +142,7 @@ describe('importing from DBeaver', () => {
     await user.click(await screen.findByRole('button', { name: 'Import 2 connections from DBeaver' }))
     const dialog = await screen.findByRole('dialog', { name: 'Import from DBeaver' })
     expect(await within(dialog).findByText('Work / Client A')).toBeTruthy()
-    expect(within(dialog).getByText('elasticsearch connections are not supported')).toBeTruthy()
+    expect(within(dialog).getByText('Skipped: elasticsearch connections are not supported')).toBeTruthy()
     await user.click(within(dialog).getByRole('button', { name: 'Import 2 connections' }))
 
     await waitFor(() => expect(backend.called('dbeaver_import')).toHaveLength(1))

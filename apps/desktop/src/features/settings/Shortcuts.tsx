@@ -150,7 +150,7 @@ export function Shortcuts() {
         </table>
       </div>
       <div className="flex items-center gap-2 border-t border-border px-4 py-3">
-        <p role="status" className="min-w-0 flex-1 text-[12px] text-[#e5484d]">
+        <p role="status" className="min-w-0 flex-1 text-[12px] text-danger">
           {warning}
         </p>
         <Button kind="primary" onClick={closeDialog}>

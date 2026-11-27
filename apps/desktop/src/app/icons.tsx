@@ -16,6 +16,7 @@ export type IconName =
   | 'sidebarLeft'
   | 'sidebarRight'
   | 'close'
+  | 'group'
 
 const PATHS: Record<IconName, ReactNode> = {
   database: (
@@ -25,7 +26,12 @@ const PATHS: Record<IconName, ReactNode> = {
       <path d="M3 8c0 1.1 2.2 2 5 2s5-.9 5-2" />
     </>
   ),
-  schema: <path d="M1.5 4.5v8h13v-7H8L6.5 3.5h-5z" />,
+  schema: (
+    <>
+      <path d="M8 2l6 3-6 3-6-3z" />
+      <path d="M2 8l6 3 6-3M2 11l6 3 6-3" />
+    </>
+  ),
   table: (
     <>
       <rect x="1.5" y="2.5" width="13" height="11" rx="1" />
@@ -61,6 +67,13 @@ const PATHS: Record<IconName, ReactNode> = {
     </>
   ),
   close: <path d="M4 4l8 8M12 4l-8 8" />,
+  group: (
+    <>
+      <rect x="2" y="2.5" width="12" height="3" rx="1" />
+      <rect x="2" y="6.5" width="12" height="3" rx="1" />
+      <rect x="2" y="10.5" width="12" height="3" rx="1" />
+    </>
+  ),
 }
 
 /** A 14px icon for `name`, hidden from screen readers (the label says what it is). */

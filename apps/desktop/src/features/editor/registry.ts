@@ -43,4 +43,6 @@ export function selectionIn(id: string): { from: number; to: number } | null {
 export const editorHooks = {
   /** Briefly highlights a range in a tab's editor. */
   flash: (_id: string, _from: number, _to: number) => {},
+  /** Closes the completion list, if one is open. */
+  closeCompletion: (_id: string) => {},
 }

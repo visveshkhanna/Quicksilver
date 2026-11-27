@@ -8,7 +8,10 @@ import { KeyCaps } from './Kbd'
 export function MenuContent({ children }: { children: ReactNode }) {
   return (
     <Menu.Portal>
-      <Menu.Content className="z-50 min-w-48 rounded-md border border-border bg-bg p-1 shadow-xl">
+      <Menu.Content
+        collisionPadding={8}
+        className="z-50 min-w-48 rounded-md border border-border bg-popover p-1 shadow-xl"
+      >
         {children}
       </Menu.Content>
     </Menu.Portal>
@@ -33,8 +36,8 @@ export function MenuItem({
     <Menu.Item
       onSelect={onSelect}
       disabled={disabled}
-      className={`flex cursor-default items-center gap-4 rounded px-2 py-1 outline-none data-disabled:opacity-40 data-highlighted:bg-accent/15 ${
-        danger ? 'text-[#e5484d]' : ''
+      className={`flex min-h-7 cursor-default items-center gap-4 rounded px-2 py-1 outline-none data-disabled:opacity-40 data-highlighted:bg-accent/15 ${
+        danger ? 'text-danger' : ''
       }`}
     >
       <span className="flex-1">{children}</span>
@@ -54,7 +57,8 @@ export function DropMenu({ trigger, children }: { trigger: ReactNode; children: 
         <Drop.Content
           align="end"
           sideOffset={4}
-          className="z-50 min-w-48 rounded-md border border-border bg-bg p-1 shadow-xl"
+          collisionPadding={8}
+          className="z-50 min-w-48 rounded-md border border-border bg-popover p-1 shadow-xl"
         >
           {children}
         </Drop.Content>
@@ -67,7 +71,7 @@ export function DropItem({ children, onSelect }: { children: ReactNode; onSelect
   return (
     <Drop.Item
       onSelect={onSelect}
-      className="flex cursor-default items-center gap-4 rounded px-2 py-1 outline-none data-highlighted:bg-accent/15"
+      className="flex min-h-7 cursor-default items-center gap-4 rounded px-2 py-1 outline-none data-highlighted:bg-accent/15"
     >
       {children}
     </Drop.Item>

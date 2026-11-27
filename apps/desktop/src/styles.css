@@ -18,7 +18,13 @@
   --color-syntax-string: #1f7a3d;
   --color-syntax-number: #b4561a;
   --color-syntax-type: #0b7285;
-  --color-danger: #e5484d;
+  /* Status colours, readable as text on bg and panel. */
+  --color-danger: #d1242f;
+  --color-warning: #a35a00;
+  --color-success: #1a7f4b;
+  /* Menus and dialogs, lifted off the page behind them. */
+  --color-popover: #ffffff;
+  --color-overlay: rgb(0 0 0 / 0.3);
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
 }
@@ -37,6 +43,11 @@
     --color-syntax-string: #8bd49c;
     --color-syntax-number: #f0a86b;
     --color-syntax-type: #66d0e0;
+    --color-danger: #ff6b6b;
+    --color-warning: #f0b450;
+    --color-success: #4cc38a;
+    --color-popover: #22262e;
+    --color-overlay: rgb(0 0 0 / 0.55);
   }
 }
 
@@ -61,4 +72,37 @@ body {
 input,
 textarea {
   user-select: text;
+}
+
+/* One focus ring for keyboard focus everywhere, instead of the browser's. */
+:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-accent) 60%, transparent);
+  outline-offset: 1px;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--color-accent);
+}
+
+/* The search field's clear button, drawn like the app's own close buttons. */
+input[type="search"]::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  height: 12px;
+  width: 12px;
+  background: var(--color-muted);
+  mask:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 4l8 8M12 4l-8 8' stroke='black' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  cursor: pointer;
+}
+
+/* Selects drawn like the text inputs beside them. */
+select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.5 6.5L8 10l3.5-3.5' fill='none' stroke='%23888' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+  background-size: 14px;
+  padding-right: 24px;
 }

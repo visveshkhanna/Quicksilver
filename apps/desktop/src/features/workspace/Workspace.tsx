@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Group, Panel, Separator, useDefaultLayout } from 'react-resizable-panels'
 import { COMMANDS } from '../../app/commands'
 import { Kbd } from '../../app/Kbd'
@@ -33,6 +33,8 @@ export function Workspace() {
   const tabs = useApp((s) => s.tabs)
   const activeId = useApp((s) => s.activeTabId)
   const active = tabs.find((t) => t.id === activeId)
+  // Each tab names its database only when the tabs are not all on one.
+  const mixed = new Set(tabs.map((t) => `${t.profileId}/${t.database}`)).size > 1
 
   return (
     <main className="flex h-full min-w-0 flex-col bg-bg">
@@ -42,7 +44,7 @@ export function Workspace() {
         aria-label="Query tabs"
       >
         {tabs.map((tab) => (
-          <TabButton key={tab.id} tab={tab} active={tab.id === activeId} />
+          <TabButton key={tab.id} tab={tab} active={tab.id === activeId} showWhere={mixed} />
         ))}
         <button
           type="button"
@@ -59,13 +61,18 @@ export function Workspace() {
   )
 }
 
-function TabButton({ tab, active }: { tab: Tab; active: boolean }) {
+function TabButton({ tab, active, showWhere }: { tab: Tab; active: boolean; showWhere: boolean }) {
   const profile = useApp((s) => s.profiles.find((p) => p.id === tab.profileId))
   const where = profile ? `${profile.name}${tab.database ? `/${tab.database}` : ''}` : 'no database'
   const [renaming, setRenaming] = useState(false)
+  const self = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (active) self.current?.scrollIntoView?.({ inline: 'nearest', block: 'nearest' })
+  }, [active])
   const unsaved = draftSize(tab.draft)
   return (
     <div
+      ref={self}
       role="tab"
       tabIndex={0}
       aria-selected={active}
@@ -74,8 +81,8 @@ function TabButton({ tab, active }: { tab: Tab; active: boolean }) {
       onKeyDown={(e) => e.key === 'Enter' && activateTab(tab.id)}
       onAuxClick={(e) => e.button === 1 && closeTab(tab.id)}
       onDoubleClick={() => setRenaming(true)}
-      className={`group relative flex max-w-64 shrink-0 cursor-default items-center gap-1.5 border-r border-border px-3 ${
-        active ? 'bg-bg' : 'text-muted hover:bg-raised'
+      className={`group relative flex max-w-56 min-w-24 shrink-0 cursor-default items-center gap-1.5 border-r border-border px-3 ${
+        active ? 'bg-bg text-fg shadow-[inset_0_-2px_0_var(--color-accent)]' : 'text-muted hover:bg-raised'
       }`}
     >
       {profile?.color && (
@@ -110,10 +117,10 @@ function TabButton({ tab, active }: { tab: Tab; active: boolean }) {
       ) : (
         <span className="truncate">{tab.title}</span>
       )}
-      <span className="truncate text-[11px] text-muted">· {where}</span>
+      {showWhere && <span className="truncate text-[11px] text-muted">· {where}</span>}
       {unsaved > 0 && (
         <span
-          className="text-[11px] text-[#e5a00d]"
+          className="text-[11px] text-warning"
           title={`${unsaved} unsaved row change${unsaved === 1 ? '' : 's'}`}
         >
           ●<span className="sr-only"> unsaved changes</span>
@@ -163,7 +170,11 @@ function Welcome() {
 function TabBody({ tab }: { tab: Tab }) {
   const profile = useApp((s) => s.profiles.find((p) => p.id === tab.profileId))
   const running = tab.run?.status === 'running'
-  const layout = useDefaultLayout({ id: 'editor-results', storage: panelStorage })
+  // A table's tab is mostly about its rows: its generated query gets a small editor.
+  const layout = useDefaultLayout({
+    id: tab.table ? 'table-editor-results' : 'editor-results',
+    storage: panelStorage,
+  })
   const engine = profile?.engine ?? null
   const target = useMemo(
     () => ({ profileId: tab.profileId, database: tab.database }),
@@ -172,21 +183,27 @@ function TabBody({ tab }: { tab: Tab }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-2">
+      <div className="@container flex h-9 shrink-0 items-center gap-2 border-b border-border px-2">
         <button
           type="button"
           onClick={() => openDialog({ kind: 'switcher' })}
-          className="flex min-w-0 items-center gap-1.5 rounded border border-border px-2 py-0.5 hover:bg-raised"
-          title="Switch database"
+          className="flex min-w-[7rem] items-center gap-1.5 rounded border border-border px-2 py-0.5 hover:bg-raised"
+          title={
+            profile
+              ? `${profile.name} / ${tab.database ?? 'default database'} (switch database)`
+              : 'Switch database'
+          }
         >
           {profile?.color && <ColorDot color={profile.color} />}
-          <span className="truncate">
+          <span className="min-w-0 truncate">
             {profile ? `${profile.name} / ${tab.database ?? 'default database'}` : 'Choose a database…'}
           </span>
-          <Kbd id="switch-database" />
+          <span className="shrink-0 @max-[760px]:hidden">
+            <Kbd id="switch-database" />
+          </span>
         </button>
         {profile?.mode === 'readOnly' && (
-          <span className="rounded bg-raised px-1.5 py-0.5 text-[11px] font-semibold text-muted">
+          <span className="shrink-0 rounded bg-raised px-1.5 py-0.5 text-[11px] font-semibold whitespace-nowrap text-muted @max-[480px]:hidden">
             READ-ONLY
           </span>
         )}
@@ -199,10 +216,16 @@ function TabBody({ tab }: { tab: Tab }) {
                 onClick={() => void explainActive()}
                 disabled={!profile}
                 title="Explain without running"
+                className="@max-[640px]:hidden"
               >
                 Explain
               </Button>
-              <Button onClick={() => void runActive('all')} disabled={!profile} title="Run everything">
+              <Button
+                onClick={() => void runActive('all')}
+                disabled={!profile}
+                title="Run everything"
+                className="@max-[540px]:hidden"
+              >
                 Run all
               </Button>
               <Button kind="primary" onClick={() => void runActive('statement')} disabled={!profile}>
@@ -219,7 +242,7 @@ function TabBody({ tab }: { tab: Tab }) {
         defaultLayout={layout.defaultLayout}
         onLayoutChanged={layout.onLayoutChanged}
       >
-        <Panel id="editor" defaultSize="40%" minSize="80px">
+        <Panel id="editor" defaultSize={tab.table ? '18%' : '40%'} minSize="60px">
           <SqlEditor
             tabId={tab.id}
             doc={tab.sql}
@@ -248,13 +271,16 @@ function FilterBar({ tab }: { tab: Tab }) {
   const [text, setText] = useState(tab.filter)
   return (
     <form
-      className="flex h-8 shrink-0 items-center gap-2 border-b border-border px-2"
+      className="flex h-9 shrink-0 items-center border-b border-border px-2"
       onSubmit={(e) => {
         e.preventDefault()
         void applyFilter(text)
       }}
     >
-      <label htmlFor={`filter-${tab.id}`} className="shrink-0 font-mono text-[12px] font-semibold text-muted">
+      <label
+        htmlFor={`filter-${tab.id}`}
+        className="flex h-6 shrink-0 items-center rounded-l border border-r-0 border-border bg-raised px-2 font-mono text-[11px] font-semibold text-muted"
+      >
         WHERE
       </label>
       <input
@@ -269,11 +295,11 @@ function FilterBar({ tab }: { tab: Tab }) {
             void applyFilter('')
           }
         }}
-        placeholder="a condition, or ORDER BY …; Enter runs it"
+        placeholder="a condition, or ORDER BY …  (Enter runs it, Esc clears)"
         spellCheck={false}
         autoCapitalize="off"
         autoCorrect="off"
-        className="min-w-0 flex-1 bg-transparent font-mono text-[12px] outline-none"
+        className="h-6 min-w-0 flex-1 rounded-r border border-border bg-bg px-2 font-mono text-[12px] outline-none focus:border-accent"
       />
     </form>
   )

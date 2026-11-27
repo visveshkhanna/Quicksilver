@@ -1107,6 +1107,7 @@ export async function runActive(mode: 'statement' | 'all') {
     return
   }
   const { script, offset } = text
+  editorHooks.closeCompletion(tab.id)
   // Show which statement runs: with the cursor between two, it may not be obvious.
   if (mode === 'statement' && !selectionIn(tab.id)) editorHooks.flash(tab.id, offset, offset + script.length)
   unlessDraft(tab.id, 'run the query', () => void runScript(tab.id, script, offset, ROW_CAP))
