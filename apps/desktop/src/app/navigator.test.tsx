@@ -79,7 +79,7 @@ describe('project folders', () => {
     fireEvent.contextMenu(await row('prod-pg'))
     await user.click(await screen.findByRole('menuitem', { name: 'Move to folder…' }))
     const move = await screen.findByRole('dialog', { name: 'Move prod-pg' })
-    await user.type(within(move).getByRole('textbox'), 'Personal/Side')
+    await user.type(within(move).getByRole('combobox'), 'Personal/Side')
     await user.keyboard('{Enter}')
     await waitFor(() =>
       expect(useApp.getState().profiles.find((p) => p.id === 'pg')?.project).toBe('Personal/Side'),

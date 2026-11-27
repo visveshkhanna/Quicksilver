@@ -137,6 +137,8 @@ export type Dialog =
       label: string
       initial: string
       confirmLabel: string
+      /** Values offered as the user types. */
+      suggestions?: string[]
       /** Why `value` will not do, or `null` to accept it. */
       check: (value: string) => string | null
       run: (value: string) => void
@@ -308,8 +310,27 @@ export function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
-export function say(text: string, error = false) {
-  set({ message: { text, error } })
+let messageTimer: ReturnType<typeof setTimeout> | undefined
+
+/**
+ * Puts a message in the status bar. It goes after a few seconds (an error
+ * after longer), when a newer one replaces it, or when clicked.
+ */
+export function say(text: string, error = false, keep = false) {
+  const message = { text, error }
+  set({ message })
+  clearTimeout(messageTimer)
+  if (keep) return
+  messageTimer = setTimeout(
+    () => {
+      if (get().message === message) set({ message: null })
+    },
+    error ? 15_000 : 5_000,
+  )
+}
+
+export function clearMessage() {
+  set({ message: null })
 }
 
 // --- Dialogs ------------------------------------------------------------------
@@ -529,6 +550,57 @@ async function connect(profileId: string, database: string | null): Promise<Sess
   // The catalog cache is refreshed in the background after connecting.
   setTimeout(() => void reloadCatalog(), 1500)
   return info
+}
+
+/** What disconnecting `profileId` would cut off: runs going and unsaved row changes. */
+function liveWork(profileId: string): { running: number; unsaved: number } {
+  const tabs = get().tabs.filter((t) => t.profileId === profileId)
+  return {
+    running: tabs.filter((t) => t.run?.status === 'running' || starting.has(t.id)).length,
+    unsaved: tabs.reduce((n, t) => n + draftSize(t.draft), 0),
+  }
+}
+
+/** Why closing `profileId`'s sessions needs asking, or `null` when nothing is lost. */
+function whatIsLost(profileId: string): string | null {
+  const { running, unsaved } = liveWork(profileId)
+  const lost = [
+    running > 0 && `${running} running quer${running === 1 ? 'y' : 'ies'} will be stopped`,
+    unsaved > 0 && `${unsaved} unsaved row change${unsaved === 1 ? '' : 's'} will be lost`,
+  ].filter(Boolean)
+  return lost.length > 0 ? `${lost.join(', and ')}.` : null
+}
+
+/** Disconnects, asking first when that would stop a query or lose row changes. */
+export function askDisconnect(profileId: string) {
+  const lost = whatIsLost(profileId)
+  if (lost === null) {
+    void disconnectProfile(profileId)
+    return
+  }
+  openDialog({
+    kind: 'confirm',
+    title: `Disconnect ${profileById(profileId)?.name ?? ''}?`,
+    message: lost.charAt(0).toUpperCase() + lost.slice(1),
+    confirmLabel: 'Disconnect',
+    run: () => {
+      for (const t of get().tabs) if (t.profileId === profileId) updateTab(t.id, { draft: null })
+      void disconnectProfile(profileId)
+    },
+  })
+}
+
+/** For the connection form: what saving a change to how it connects would cut off. */
+export function reconnectCost(
+  profileId: string,
+  fields: ProfileFields,
+  password: saved.PasswordChange,
+): string | null {
+  const before = profileById(profileId)
+  if (!before) return null
+  const after = { ...before, ...fields }
+  if (password.kind === 'keep' && !connectionChanged(before, after)) return null
+  return whatIsLost(profileId)
 }
 
 /**
@@ -863,6 +935,15 @@ export function reopenTab() {
   persistTab(restored, true)
 }
 
+/** Names a tab; a blank name keeps the old one. */
+export function renameTab(id: string, title: string) {
+  const name = title.trim()
+  const tab = get().tabs.find((t) => t.id === id)
+  if (!tab || name === '' || name === tab.title) return
+  updateTab(id, { title: name })
+  persistTab({ ...tab, title: name }, true)
+}
+
 export function setTabText(id: string, sql: string, cursor: number) {
   updateTab(id, { sql, cursor })
   // The editor drops an error's underline once the text changes; forget it
@@ -972,7 +1053,8 @@ async function sessionFor(tab: Tab): Promise<{ profile: Profile; session: Sessio
     return null
   }
   try {
-    if (!get().sessions[targetKey(profile.id, tab.database)]) say(`Connecting to ${profile.name}…`)
+    if (!get().sessions[targetKey(profile.id, tab.database)])
+      say(`Connecting to ${profile.name}…`, false, true)
     const session = await ensureSession(profile.id, tab.database)
     if (get().message?.text.startsWith('Connecting to ')) set({ message: null })
     return { profile, session }
@@ -1623,13 +1705,12 @@ const GROUP_OF: Record<DbObject['kind'], ObjectGroup> = {
 }
 
 /**
- * Shows a connection, database, schema or object in the navigator: opens
- * the panel, expands (and loads) each level above it, highlights it and
- * scrolls it into view. Clears a filter that could hide it.
+ * Shows a connection, database, schema or object in the navigator: expands
+ * (and loads) each level above it, highlights it and scrolls it into view.
+ * A hidden navigator stays hidden and a filter stays as typed; both are the
+ * user's choice.
  */
 export async function reveal(node: NodeRef) {
-  if (!get().panels.navigator) togglePanel('navigator')
-  if (get().filter !== '') setFilter('')
   const path: NodeRef[] = [{ kind: 'connection', profileId: node.profileId }]
   if (node.kind !== 'connection')
     path.push({ kind: 'database', profileId: node.profileId, database: node.database })

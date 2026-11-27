@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Group, Panel, Separator, useDefaultLayout } from 'react-resizable-panels'
+import { COMMANDS } from '../../app/commands'
 import { Kbd } from '../../app/Kbd'
 import { Button, ColorDot } from '../../app/ui'
 import { binding } from '../../keymap/keymap'
@@ -9,9 +10,11 @@ import {
   applyFilter,
   cancelActive,
   closeTab,
+  draftSize,
   explainActive,
   newTab,
   openDialog,
+  renameTab,
   runActive,
   setTabCursor,
   setTabText,
@@ -59,15 +62,18 @@ export function Workspace() {
 function TabButton({ tab, active }: { tab: Tab; active: boolean }) {
   const profile = useApp((s) => s.profiles.find((p) => p.id === tab.profileId))
   const where = profile ? `${profile.name}${tab.database ? `/${tab.database}` : ''}` : 'no database'
+  const [renaming, setRenaming] = useState(false)
+  const unsaved = draftSize(tab.draft)
   return (
     <div
       role="tab"
       tabIndex={0}
       aria-selected={active}
-      title={`${tab.title} · ${where}`}
+      title={`${tab.title} · ${where} (double-click to rename)`}
       onClick={() => activateTab(tab.id)}
       onKeyDown={(e) => e.key === 'Enter' && activateTab(tab.id)}
       onAuxClick={(e) => e.button === 1 && closeTab(tab.id)}
+      onDoubleClick={() => setRenaming(true)}
       className={`group relative flex max-w-64 shrink-0 cursor-default items-center gap-1.5 border-r border-border px-3 ${
         active ? 'bg-bg' : 'text-muted hover:bg-raised'
       }`}
@@ -79,9 +85,45 @@ function TabButton({ tab, active }: { tab: Tab; active: boolean }) {
           style={{ background: COLORS[profile.color] }}
         />
       )}
-      <span className="truncate">{tab.title}</span>
+      {renaming ? (
+        <input
+          // biome-ignore lint/a11y/noAutofocus: renaming starts on a double-click
+          autoFocus
+          aria-label="Tab name"
+          defaultValue={tab.title}
+          onFocus={(e) => e.currentTarget.select()}
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            e.stopPropagation()
+            if (e.key === 'Enter') e.currentTarget.blur()
+            else if (e.key === 'Escape') {
+              e.currentTarget.value = tab.title
+              e.currentTarget.blur()
+            }
+          }}
+          onBlur={(e) => {
+            renameTab(tab.id, e.currentTarget.value)
+            setRenaming(false)
+          }}
+          className="w-32 rounded border border-accent bg-bg px-1 outline-none"
+        />
+      ) : (
+        <span className="truncate">{tab.title}</span>
+      )}
       <span className="truncate text-[11px] text-muted">· {where}</span>
-      {tab.run?.status === 'running' && <span className="text-[11px] text-accent">●</span>}
+      {unsaved > 0 && (
+        <span
+          className="text-[11px] text-[#e5a00d]"
+          title={`${unsaved} unsaved row change${unsaved === 1 ? '' : 's'}`}
+        >
+          ●<span className="sr-only"> unsaved changes</span>
+        </span>
+      )}
+      {tab.run?.status === 'running' && (
+        <span className="text-[11px] text-accent" title="Running">
+          ●<span className="sr-only"> running</span>
+        </span>
+      )}
       <button
         type="button"
         aria-label={`Close ${tab.title}`}
@@ -99,17 +141,21 @@ function TabButton({ tab, active }: { tab: Tab; active: boolean }) {
 
 function Welcome() {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-6">
-      <dl className="grid grid-cols-[auto_auto] items-center gap-x-6 gap-y-2 text-muted">
+    <div className="flex flex-1 flex-col items-center justify-center gap-4">
+      <p className="m-0 text-muted">No query tabs open.</p>
+      <div className="flex flex-col gap-1">
         {HINTS.map((id) => (
-          <div key={id} className="contents">
-            <dt className="text-right">{binding(id).title}</dt>
-            <dd className="m-0">
-              <Kbd id={id} />
-            </dd>
-          </div>
+          <button
+            key={id}
+            type="button"
+            onClick={() => COMMANDS.find((c) => c.id === id)?.run()}
+            className="flex min-w-72 items-center justify-between gap-6 rounded px-3 py-1.5 text-muted hover:bg-raised hover:text-fg"
+          >
+            {binding(id).title}
+            <Kbd id={id} />
+          </button>
         ))}
-      </dl>
+      </div>
     </div>
   )
 }

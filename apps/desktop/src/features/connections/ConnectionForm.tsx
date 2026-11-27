@@ -13,7 +13,19 @@ import {
 import type { Engine } from '../../ipc/types'
 import { chooseFile } from '../../lib/files'
 import { COLORS } from '../../lib/target'
-import { closeDialog, errorText, profileById, saveProfile, useApp } from '../../state/app'
+import {
+  closeDialog,
+  errorText,
+  newTab,
+  openDialog,
+  profileById,
+  reconnectCost,
+  reveal,
+  saveProfile,
+  say,
+  useApp,
+} from '../../state/app'
+import { allPaths, buildTree } from '../navigator/projects'
 import { formatUrl } from './url'
 
 /** Engines this build has drivers for. More arrive with their drivers. */
@@ -104,10 +116,8 @@ export function ConnectionForm({
 }) {
   const existing = profileById(profileId)
   const profiles = useApp((s) => s.profiles)
-  const projects = useMemo(
-    () => [...new Set(profiles.flatMap((p) => (p.project ? [p.project] : [])))],
-    [profiles],
-  )
+  const folders = useApp((s) => s.folders)
+  const projects = useMemo(() => allPaths(buildTree(profiles, folders)), [profiles, folders])
   const [fields, setFields] = useState<ProfileFields>(() => {
     if (!existing) return { ...blank(), project: project ?? null }
     const { id, createdMs, updatedMs, ...rest } = existing
@@ -252,8 +262,28 @@ export function ConnectionForm({
             : forget
               ? { kind: 'clear' }
               : { kind: 'keep' }
-      await saveProfile(profileId, final(), change)
-      closeDialog()
+      const write = async () => {
+        const saved = await saveProfile(profileId, final(), change)
+        closeDialog()
+        if (!profileId) {
+          // A new connection: show it, and open a tab on it ready to query.
+          void reveal({ kind: 'connection', profileId: saved.id })
+          newTab({ profileId: saved.id, database: saved.database })
+        }
+      }
+      const lost = profileId ? reconnectCost(profileId, final(), change) : null
+      if (lost) {
+        setBusy(false)
+        openDialog({
+          kind: 'confirm',
+          title: 'Reconnect with the new settings?',
+          message: `Its open sessions reconnect, so ${lost}`,
+          confirmLabel: 'Save and reconnect',
+          run: () => void write().catch((err) => say(errorText(err), true)),
+        })
+        return
+      }
+      await write()
     } catch (err) {
       setStatus({ text: errorText(err), ok: false })
       setBusy(false)
@@ -544,13 +574,13 @@ export function ConnectionForm({
                   </Swatch>
                 ))}
               </div>
-              <Label htmlFor="cf-project">Project</Label>
+              <Label htmlFor="cf-project">Folder</Label>
               <input
                 id="cf-project"
                 list="cf-projects"
                 value={fields.project ?? ''}
                 onChange={(e) => set('project', empty(e.target.value))}
-                placeholder="Groups connections in the navigator"
+                placeholder="Work/Client A (nest with /)"
                 className={INPUT}
               />
               <datalist id="cf-projects">
@@ -565,8 +595,7 @@ export function ConnectionForm({
         <div className="flex items-center gap-2 border-t border-border px-4 py-3">
           <p
             role="status"
-            className={`min-w-0 flex-1 truncate text-[12px] ${status?.ok === false ? 'text-[#e5484d]' : 'text-muted'}`}
-            title={status?.text}
+            className={`max-h-20 min-w-0 flex-1 overflow-auto text-[12px] break-words select-text ${status?.ok === false ? 'text-[#e5484d]' : 'text-muted'}`}
           >
             {status?.text}
           </p>

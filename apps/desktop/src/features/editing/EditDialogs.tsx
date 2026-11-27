@@ -232,10 +232,18 @@ export function Prompt() {
               setProblem(null)
             }}
             onFocus={(e) => e.currentTarget.select()}
+            list={dialog.suggestions ? 'prompt-suggestions' : undefined}
             aria-invalid={problem !== null}
             className="rounded border border-border bg-bg px-2 py-1 outline-none focus:border-accent aria-invalid:border-[#e5484d]"
           />
         </label>
+        {dialog.suggestions && (
+          <datalist id="prompt-suggestions">
+            {dialog.suggestions.map((v) => (
+              <option key={v} value={v} />
+            ))}
+          </datalist>
+        )}
         {problem && (
           <p role="alert" className="m-0 text-[12px] text-[#e5484d]">
             {problem}

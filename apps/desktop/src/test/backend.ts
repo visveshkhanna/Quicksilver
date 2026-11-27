@@ -110,6 +110,8 @@ export function fakeBackend({
   const layout = new Map<string, unknown>()
   const saved = new Map<string, string>()
   let nextSession = 1
+  /** Sessions the "server" has closed: every use fails with `closed`. */
+  const dead = new Set<number>()
   let nextId = 100
   const results = new Map<number, Result>()
   const sendTo = (channel: unknown) => {
@@ -156,12 +158,23 @@ export function fakeBackend({
           throw { kind: 'passwordNeeded', message: 'no password is saved' }
         }
         const p = profiles.find((x) => x.id === id)
+        if (p?.host === 'unreachable.example') {
+          throw { kind: 'connect', message: 'could not connect to server: Connection refused' }
+        }
+        if (args.password === 'wrong') {
+          throw { kind: 'connect', message: 'password authentication failed for user "quicksilver"' }
+        }
         return {
           id: nextSession++,
           engine: p?.engine ?? 'postgres',
           database: (args.database as string | null) ?? p?.database ?? null,
           readOnly: p?.mode === 'readOnly',
         }
+      }
+      case 'create_profile': {
+        const created = { ...(args.fields as ProfileFields), id: `p${nextId++}`, createdMs: 1, updatedMs: 1 }
+        profiles.push(created)
+        return created
       }
       case 'update_profile': {
         const change = args.password as { kind: string; password?: string }
@@ -239,6 +252,7 @@ export function fakeBackend({
         const script = args.script as string
         const cap = args.rowCap as number | null
         const runId = nextId++
+        if (dead.has(args.session as number)) throw { kind: 'closed' }
         // A read-write connection asks before a schema change.
         if (/\b(create|drop|alter)\b/i.test(script) && !args.confirmed) {
           throw {
@@ -387,6 +401,10 @@ export function fakeBackend({
     calls,
     results,
     called: (cmd: string) => calls.filter((c) => c.cmd === cmd),
+    /** Closes every open session from the server's side, as an idle timeout would. */
+    dropSessions: () => {
+      for (let id = 1; id < nextSession; id++) dead.add(id)
+    },
   }
 }
 

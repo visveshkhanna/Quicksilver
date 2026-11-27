@@ -9,6 +9,7 @@ import {
   formatKeys,
   keysFor,
   matches,
+  reservedFor,
   tabJump,
 } from './keymap'
 
@@ -91,5 +92,15 @@ describe('matching key events', () => {
     expect(tabJump(ev('Digit3', { metaKey: true }), 'mac')).toBe(2)
     expect(tabJump(ev('Digit0', { metaKey: true }), 'mac')).toBeNull()
     expect(tabJump(ev('Digit3', { metaKey: true, shiftKey: true }), 'mac')).toBeNull()
+  })
+})
+
+describe('reserved keys', () => {
+  it('keeps tab jumps, editing keys and the grid’s own keys from commands', () => {
+    expect(reservedFor('Mod+3', undefined)).toMatch('tab 3')
+    expect(reservedFor('Mod+Z', undefined)).toMatch('undo')
+    expect(reservedFor('Enter', 'grid')).toMatch('grid')
+    expect(reservedFor('Enter', undefined)).toBeNull()
+    expect(reservedFor('Mod+Shift+K', undefined)).toBeNull()
   })
 })

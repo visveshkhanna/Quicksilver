@@ -9,10 +9,10 @@ import { dbeaverScan, type Profile } from '../../ipc/store'
 import type { ColumnInfo, DbObject } from '../../ipc/types'
 import { copyText } from '../../lib/clipboard'
 import {
+  askDisconnect,
   createFolder,
   deleteFolder,
   deleteProfile,
-  disconnectProfile,
   ensureSession,
   errorText,
   indexProfile,
@@ -69,7 +69,10 @@ const ICONS: Record<DbObject['kind'], IconName> = {
 const OPENABLE = new Set<DbObject['kind']>(['table', 'view', 'materializedView', 'foreignTable'])
 
 function copy(text: string) {
-  copyText(text).catch((err) => say(`Could not copy: ${errorText(err)}`, true))
+  copyText(text).then(
+    () => say(`Copied ${text}`),
+    (err) => say(`Could not copy: ${errorText(err)}`, true),
+  )
 }
 
 /** Copies the SQL that creates an object, as the server describes it. */
@@ -217,6 +220,15 @@ function useDropTarget(target: string | null) {
   return { over, handlers }
 }
 
+/** Why `path` cannot be used for a new or renamed folder: one is there already. */
+function taken(path: string | null): string | null {
+  const { profiles, folders } = useApp.getState()
+  const paths = allPaths(buildTree(profiles, folders))
+  return path && paths.some((p) => p.toLowerCase() === path.toLowerCase())
+    ? `There is already a folder named ${nameOf(path)} there.`
+    : null
+}
+
 function askFolderName(parent: string | null) {
   openDialog({
     kind: 'prompt',
@@ -226,7 +238,7 @@ function askFolderName(parent: string | null) {
     confirmLabel: 'Create',
     check: (name) => {
       if (splitPath(parent).length >= MAX_DEPTH) return `Folders nest at most ${MAX_DEPTH} deep.`
-      return badFolderName(name)
+      return badFolderName(name) ?? taken(normalPath(`${parent ?? ''}/${name}`))
     },
     run: (name) => createFolder(parent, name),
   })
@@ -239,20 +251,23 @@ function askRename(path: string) {
     label: 'Name',
     initial: nameOf(path),
     confirmLabel: 'Rename',
-    check: badFolderName,
+    check: (name) => {
+      const to = normalPath(`${parentOf(path) ?? ''}/${name}`)
+      return badFolderName(name) ?? (to === path ? null : taken(to))
+    },
     run: (name) => void moveFolder(path, normalPath(`${parentOf(path) ?? ''}/${name}`)),
   })
 }
 
 function askMove(profile: Profile) {
   const { profiles, folders: saved } = useApp.getState()
-  const folders = allPaths(buildTree(profiles, saved))
   openDialog({
     kind: 'prompt',
     title: `Move ${profile.name}`,
-    label: `Folder, nested with "/" (empty for the top level). Existing: ${folders.join(', ') || 'none'}`,
+    label: 'Folder (nest with "/"; leave empty for the top level)',
     initial: profile.project ?? '',
     confirmLabel: 'Move',
+    suggestions: allPaths(buildTree(profiles, saved)),
     check: (path) => (splitPath(path).length > MAX_DEPTH ? `Folders nest at most ${MAX_DEPTH} deep.` : null),
     run: (path) => void moveProfile(profile.id, normalPath(path)),
   })
@@ -527,7 +542,9 @@ function Row({
       onDoubleClick={onOpen}
       onKeyDown={(e) => {
         if (e.key === 'Enter') {
-          if (onOpen && (e.metaKey || e.ctrlKey || !expandable)) onOpen()
+          // Enter opens a table or view (its columns are on the right arrow);
+          // elsewhere it expands, and Mod+Enter opens a query on it.
+          if (onOpen && (e.metaKey || e.ctrlKey || !expandable || node.kind === 'object')) onOpen()
           else if (expandable) toggleNode(node)
         } else if (e.key === 'ArrowRight' && expandable && !open) toggleNode(node)
         else if (e.key === 'ArrowLeft' && expandable && open) toggleNode(node)
@@ -625,7 +642,7 @@ function ConnectionNode({ profile, depth }: { profile: Profile; depth: number })
             <Item onSelect={() => askMove(profile)}>Move to folder…</Item>
             <Item onSelect={() => copy(profile.name)}>Copy name</Item>
             <Item onSelect={() => refreshNode(node)}>Refresh</Item>
-            {connected && <Item onSelect={() => void disconnectProfile(profile.id)}>Disconnect</Item>}
+            {connected && <Item onSelect={() => askDisconnect(profile.id)}>Disconnect</Item>}
             <Separator />
             <Item
               danger

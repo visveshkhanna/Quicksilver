@@ -233,9 +233,9 @@ describe('rebinding', () => {
     await user.keyboard('{Control>},{/Control}')
     await screen.findByRole('dialog', { name: 'Keyboard shortcuts' })
     await user.click(screen.getByRole('button', { name: 'Change shortcut for New query tab' }))
-    await user.keyboard('{Control>}y{/Control}')
+    await user.keyboard('{Control>}u{/Control}')
     expect(screen.getByRole('button', { name: 'Change shortcut for New query tab' }).textContent).toBe(
-      'Ctrl+Y',
+      'Ctrl+U',
     )
 
     // A clash is refused and explained.
@@ -244,8 +244,14 @@ describe('rebinding', () => {
     expect(screen.getByRole('status').textContent).toContain('Switch database')
     await user.keyboard('{Escape}')
 
+    // Keys something else always takes are refused too.
+    await user.click(screen.getByRole('button', { name: 'Change shortcut for Close tab' }))
+    await user.keyboard('{Control>}z{/Control}')
+    expect(screen.getByRole('status').textContent).toContain('undo in the editor')
+    await user.keyboard('{Escape}')
+
     await user.click(screen.getByRole('button', { name: 'Done' }))
-    await user.keyboard('{Control>}y{/Control}')
+    await user.keyboard('{Control>}u{/Control}')
     expect(tabs()).toHaveLength(1)
     await user.keyboard('{Control>}t{/Control}')
     expect(tabs()).toHaveLength(1)

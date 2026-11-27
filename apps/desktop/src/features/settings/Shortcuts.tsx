@@ -9,6 +9,8 @@ import {
   eventToKeys,
   GRID_FIXED_KEYS,
   keysFor,
+  NAVIGATOR_FIXED_KEYS,
+  reservedFor,
   TAB_JUMP_KEYS,
 } from '../../keymap/keymap'
 import { closeDialog, setOverride, useApp } from '../../state/app'
@@ -45,6 +47,11 @@ export function Shortcuts() {
                 }
                 const next = eventToKeys(e.nativeEvent, platform)
                 if (!next) return
+                const reserved = reservedFor(next, b.scope)
+                if (reserved) {
+                  setWarning(`Those keys are kept for ${reserved}. Pick others.`)
+                  return
+                }
                 const clash = conflictFor(b.id, next, overrides)
                 if (clash) {
                   setWarning(`That is already “${clash.title}”. Pick other keys or change that one first.`)
@@ -70,7 +77,17 @@ export function Shortcuts() {
             </button>
           )}
         </td>
-        <td className="w-16 px-1 text-right">
+        <td className="w-28 px-1 text-right whitespace-nowrap">
+          {keys !== '' && (
+            <button
+              type="button"
+              onClick={() => setOverride(b.id, b.keys === '' ? null : '')}
+              aria-label={`Remove the shortcut for ${b.title}`}
+              className="mr-2 text-[12px] text-muted hover:text-fg hover:underline"
+            >
+              Remove
+            </button>
+          )}
           {changed && (
             <button
               type="button"
@@ -110,6 +127,16 @@ export function Shortcuts() {
               </td>
               <td />
             </tr>
+            <Heading>In the navigator</Heading>
+            {NAVIGATOR_FIXED_KEYS.map(([keys, title]) => (
+              <tr key={keys} className="border-b border-border/60 last:border-0">
+                <td className="px-2 py-1.5">{title}</td>
+                <td className="px-2 py-1.5 text-right">
+                  <KeyCaps keys={keys} />
+                </td>
+                <td />
+              </tr>
+            ))}
             <Heading>In the results grid</Heading>
             {BINDINGS.filter((b) => b.scope === 'grid').map(row)}
             {GRID_FIXED_KEYS.map(([keys, title]) => (

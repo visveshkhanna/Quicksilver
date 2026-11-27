@@ -2,7 +2,7 @@ import { Kbd } from '../../app/Kbd'
 import { Button } from '../../app/ui'
 import type { Engine } from '../../ipc/types'
 import { copyText } from '../../lib/clipboard'
-import { quoteIdent } from '../../lib/target'
+import { formatMs, quoteIdent } from '../../lib/target'
 import {
   askDiscardDraft,
   type Draft,
@@ -80,8 +80,8 @@ function RunSummary({ run }: { run: RunState }) {
   const outcome = result ? run.statements.find((s) => s.resultId === result.resultId)?.outcome : null
   const parts: string[] = []
   if (result) parts.push(`${result.rows.toLocaleString()} row${result.rows === 1 ? '' : 's'}`)
-  if (outcome) parts.push(`${outcome.elapsedMs.toLocaleString()} ms`)
-  else if (run.elapsedMs !== null) parts.push(`${run.elapsedMs.toLocaleString()} ms`)
+  if (outcome) parts.push(formatMs(outcome.elapsedMs))
+  else if (run.elapsedMs !== null) parts.push(formatMs(run.elapsedMs))
   return (
     <span role="status" className="ml-auto flex items-center gap-2 pr-1 text-muted">
       {run.status === 'running' && <span className="text-accent">Running…</span>}
@@ -121,7 +121,19 @@ function RunBody({ tab, engine }: { tab: Tab; engine: Engine | null }) {
       {run.error && <ErrorBox run={run} />}
       {result && <EditBar tab={tab} result={result} />}
       {result ? (
-        <Grid key={result.resultId} tabId={tab.id} result={result} insertTable={insertTarget(tab, engine)} />
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          <Grid
+            key={result.resultId}
+            tabId={tab.id}
+            result={result}
+            insertTable={insertTarget(tab, engine)}
+          />
+          {result.done && result.rows === 0 && (
+            <p className="pointer-events-none absolute inset-x-0 top-16 m-0 text-center text-muted">
+              No rows
+            </p>
+          )}
+        </div>
       ) : (
         run.status !== 'running' &&
         !run.error &&

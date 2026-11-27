@@ -70,6 +70,48 @@ export const GRID_FIXED_KEYS = [
 /** `Mod+1` … `Mod+9` jump to tab N. Fixed, so not in `BINDINGS`. */
 export const TAB_JUMP_KEYS = 'Mod+1…9'
 
+/** Keys the navigator handles itself. */
+export const NAVIGATOR_FIXED_KEYS = [
+  ['ArrowUp', 'Move up a row (ArrowDown: down)'],
+  ['ArrowRight', 'Expand (ArrowLeft: collapse)'],
+  ['Enter', 'Open a table or view; expand anything else'],
+  ['Mod+Enter', 'Open a query on a connection, database or schema'],
+] as const
+
+/**
+ * Keys that cannot be given to a command, because something else always
+ * takes them: tab jumps, the editor's own editing keys, and (for grid
+ * commands) the grid's fixed keys.
+ */
+const RESERVED: Record<string, string> = {
+  ...Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`Mod+${i + 1}`, `jumping to tab ${i + 1}`])),
+  'Mod+Z': 'undo in the editor',
+  'Mod+Shift+Z': 'redo in the editor',
+  'Mod+Y': 'redo in the editor',
+  'Mod+A': 'select all',
+  'Mod+C': 'copy',
+  'Mod+X': 'cut',
+  'Mod+V': 'paste',
+  'Mod+F': 'find in the editor',
+  'Mod+/': 'commenting lines in the editor',
+}
+
+const GRID_RESERVED: Record<string, string> = {
+  Enter: 'editing in the grid',
+  Tab: 'moving in the grid',
+  Escape: 'cancelling in the grid',
+  F2: 'editing a cell',
+  ArrowUp: 'moving the cursor',
+  ArrowDown: 'moving the cursor',
+  ArrowLeft: 'moving the cursor',
+  ArrowRight: 'moving the cursor',
+}
+
+/** What always takes `keys`, when a command cannot have them. */
+export function reservedFor(keys: string, scope: Binding['scope']): string | null {
+  return RESERVED[keys] ?? (scope === 'grid' ? (GRID_RESERVED[keys] ?? null) : null)
+}
+
 /** The user's changes: binding id to keys (`''` unbinds). */
 export type Overrides = Record<string, string>
 

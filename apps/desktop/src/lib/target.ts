@@ -35,3 +35,12 @@ export const COLORS = {
   purple: '#8e4ec6',
   gray: '#8b8d98',
 } as const
+
+/** A duration for people: `0.4 ms`, `12 ms`, `1.25 s`, `2 min 5 s`. */
+export function formatMs(ms: number): string {
+  if (ms < 10) return `${Math.round(ms * 10) / 10} ms`
+  if (ms < 1000) return `${Math.round(ms)} ms`
+  if (ms < 60_000) return `${(ms / 1000).toFixed(2)} s`
+  const minutes = Math.floor(ms / 60_000)
+  return `${minutes} min ${Math.round((ms - minutes * 60_000) / 1000)} s`
+}
