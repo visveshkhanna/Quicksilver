@@ -619,8 +619,10 @@ fn squash(key: &str) -> String {
 fn engine_for(provider: &str, driver: &str) -> std::result::Result<Engine, String> {
     let provider_id = provider.to_ascii_lowercase();
     let driver_id = driver.to_ascii_lowercase();
+    // Redshift speaks the PostgreSQL protocol; its catalog differs in
+    // places, but queries and browsing work over the Postgres driver.
     if driver_id.contains("redshift") || provider_id.contains("redshift") {
-        return Err("Amazon Redshift connections are not supported yet".into());
+        return Ok(Engine::Postgres);
     }
     for (needle, engine) in [
         ("sqlite", Engine::Sqlite),
@@ -1132,7 +1134,7 @@ mod tests {
             engine_for("clickhouse", "com_clickhouse"),
             Ok(Engine::Clickhouse)
         );
-        assert!(engine_for("redshift", "redshift").is_err());
+        assert_eq!(engine_for("redshift", "redshift"), Ok(Engine::Postgres));
         assert!(engine_for("oracle", "oracle_thin").is_err());
         assert!(engine_for("generic", "h2_embedded").is_err());
     }

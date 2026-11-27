@@ -243,6 +243,7 @@ export function resetApp() {
   runTokens.clear()
   refocusGrid.clear()
   indexed.clear()
+  reindex.clear()
   forgetGrids()
 }
 
@@ -524,29 +525,49 @@ export function isConnected(profileId: string): boolean {
 
 /** When each connection's databases were last read into the catalog, this run. */
 const indexed = new Map<string, number>()
-/** How long an index is trusted before a search reads the databases again. */
-const INDEX_FRESH_MS = 10 * 60_000
+/** Connections refreshed by hand: their next search reads every database again. */
+const reindex = new Set<string>()
+/** How long a database's cached table list is trusted before a search reads it again. */
+const INDEX_FRESH_MS = 60 * 60_000
+
+/** When `database`'s tables were last read into the catalog cache, if ever. */
+function indexedAt(profileId: string, database: string): number | null {
+  let at: number | null = null
+  for (const e of get().catalog) {
+    if (e.profileId === profileId && e.database === database && e.schema !== null) {
+      at = Math.max(at ?? 0, Number(e.refreshedMs))
+    }
+  }
+  return at
+}
 
 /**
  * Reads the tables of every database on a connection into the catalog, so
  * `Mod+P` and the navigator filter find them without each database being
- * opened first. Runs in the background a few databases at a time, each over
- * a connection that is closed once read; results show up as they arrive.
- * Does nothing when it ran recently, unless `force`.
+ * opened first. Runs in the background two databases at a time, each over a
+ * connection that is closed once read; results show up as they arrive. A
+ * database read in the last hour (in this run or an earlier one) is not read
+ * again, unless `force`.
  */
-export async function indexProfile(profileId: string, force = false) {
+export async function indexProfile(profileId: string, force = reindex.has(profileId)) {
   const last = indexed.get(profileId)
   if (get().indexing[profileId] || (!force && last !== undefined && Date.now() - last < INDEX_FRESH_MS))
     return
   indexed.set(profileId, Date.now())
+  reindex.delete(profileId)
   const progress = (done: number, total: number) =>
     set((s) => ({ indexing: { ...s.indexing, [profileId]: { done, total } } }))
-  progress(0, 1)
   try {
     const open = Object.entries(get().sessions).find(([k]) => k.startsWith(`${profileId}\u0000`))?.[1]
     const session = open ?? (await ensureSession(profileId, null))
     const listed = await ipc.listDatabases(session.id)
-    const databases = listed.length > 0 ? listed : session.database ? [session.database] : []
+    const all = listed.length > 0 ? listed : session.database ? [session.database] : []
+    const now = Date.now()
+    const databases = all.filter((d) => {
+      const at = indexedAt(profileId, d)
+      return force || at === null || now - at > INDEX_FRESH_MS
+    })
+    if (databases.length === 0) return
     // The connected database first: its tables are the likeliest wanted.
     databases.sort((a, b) => Number(b === session.database) - Number(a === session.database))
     let done = 0
@@ -560,7 +581,7 @@ export async function indexProfile(profileId: string, force = false) {
         await reloadCatalog()
       }
     }
-    await Promise.all([worker(), worker(), worker()])
+    await Promise.all([worker(), worker()])
   } catch {
     // Not connected (or the password prompt was dismissed): try again next time.
     indexed.delete(profileId)
@@ -1428,7 +1449,10 @@ export function toggleNode(node: NodeRef) {
 export function refreshNode(node: NodeRef) {
   const key = nodeKey(node)
   // The next search reads the connection's databases again.
-  if (node.kind === 'connection') indexed.delete(node.profileId)
+  if (node.kind === 'connection') {
+    indexed.delete(node.profileId)
+    reindex.add(node.profileId)
+  }
   set((s) => ({
     tree: Object.fromEntries(Object.entries(s.tree).filter(([k]) => !k.startsWith(`${key}/`))),
   }))
