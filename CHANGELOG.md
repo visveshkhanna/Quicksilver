@@ -103,6 +103,14 @@ All notable changes are recorded here. The format follows
 - A file chooser for the SQLite file and the TLS root certificate.
 - JDBC URLs (`jdbc:postgresql://…?user=…&password=…`) can be pasted.
 
+- Tabs can be renamed (double-click) and show a dot while they hold unsaved
+  row changes. The empty workspace offers its commands as buttons.
+- Errors can be selected and copied, and connection errors offer Try again.
+- Shortcuts: a shortcut can be removed, and keys the editor, tab jumps or
+  the grid always take are refused.
+- Closing the window or quitting saves tab text and asks before unsaved
+  row changes are lost.
+
 ### Changed
 
 - The row cap is now 100,000 per statement, up from 1,000.
@@ -122,8 +130,35 @@ All notable changes are recorded here. The format follows
   and a URL that cannot be read is said beside it instead of being lost.
 - Deleting a connection asks in the app's own dialog.
 
+- A new connection is shown in the navigator and gets a query tab.
+- Disconnecting, or saving settings that reconnect, asks first when a query
+  is running or row changes are unsaved. Discard asks first too.
+- The statement that runs is flashed in the editor; running nothing says so.
+- A table's tab gives most of its height to the rows.
+- Enter on a table in the navigator opens it.
+- Picking from `Mod+K` or `Mod+P` no longer reopens a hidden navigator or
+  clears its filter.
+- Indexing reads at most two databases at once and skips any read in the
+  last hour. DBeaver's Redshift connections import as PostgreSQL.
+- Menus and dialogs stand out from the page in dark mode, dialogs open near
+  the top so switching sections does not move them, and keyboard focus has
+  one ring everywhere. Status colours are theme tokens with readable
+  contrast.
+
 ### Fixed
 
+- A connection the server closed is reconnected on the next run (catalog
+  reads retry by themselves) instead of failing with "closed" until the
+  app is restarted.
+- A connection failure when running shows in the results, not only in the
+  status bar. A refused password is asked for again, with the reason.
+- Editing a multi-line value no longer drops its line breaks.
+- Status messages no longer stay forever; durations read as ms, s or min;
+  the status bar counts the result on show; an empty result says No rows.
+- Folder names cannot clash, and Move to folder suggests existing folders.
+- The toolbar and edit bar fit narrow windows; tabs scroll the active one
+  into view; long inspector values wrap at word boundaries and an empty
+  string is shown as such; the completion list closes when a query runs.
 - A cancel request that arrived after a capped statement had finished no
   longer cancels the next statement.
 - Column widths fit the header's type as well as its name, and grid lines
